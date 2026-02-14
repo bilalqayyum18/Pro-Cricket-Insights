@@ -10,12 +10,13 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 
 # --- SUPABASE CONNECTION ---
+# Note: Ensure st.secrets["SUPABASE_KEY"] is your 'anon' key, not 'service_role'
 supabase_status = "Disconnected"
 supabase = None
 try:
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"] # Ensure this is the 'anon' key in secrets
+        key = st.secrets["SUPABASE_KEY"] 
         supabase: Client = create_client(url, key)
         supabase_status = "Connected"
 except Exception as e:
@@ -244,7 +245,10 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                         if getattr(res, 'user', None): 
                             st.session_state.user = res.user
-                            supabase.postgrest.auth(res.session.access_token)
+                            # Critical fix: Attach token to both postgrest and global headers
+                            token = res.session.access_token
+                            supabase.postgrest.auth(token)
+                            supabase.table("prediction_logs").auth(token)
                             st.rerun()
                         else:
                             st.error("Invalid Credentials")
@@ -358,11 +362,10 @@ elif page == "Pro Prediction":
             if st.button("RUN PRO SIMULATION", use_container_width=True):
                 if supabase:
                     try:
-                        # Improved RPC call to atomically increment and return new count
-                        rpc_res = supabase.rpc("increment_prediction_usage", {"target_user_id": user_id}).execute()
-                        # Optional: could use rpc_res.data to update UI instantly
+                        # Fix: Calling parameterless RPC using internal auth context
+                        supabase.rpc("increment_prediction_usage").execute()
                     except Exception as e: 
-                        st.error(f"Database Error: Ensure the SQL Function is created in Supabase. Detail: {e}")
+                        st.error(f"Database Error: {e}")
 
                 with st.spinner("Analyzing historical variables..."):
                     time.sleep(1)
@@ -392,6 +395,9 @@ elif page == "Pro Prediction":
                     res1, res2 = st.columns(2)
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                
+                # Instant UI Refresh
+                st.rerun()
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

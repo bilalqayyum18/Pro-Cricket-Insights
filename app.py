@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+import pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
@@ -197,7 +197,6 @@ def sync_user_data(user):
             
             if res.data and len(res.data) > 0:
                 st.session_state.is_pro = res.data[0]['is_pro']
-                # Correctly track remaining usage based on what's in the DB
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
                 return True
             else:
@@ -295,10 +294,15 @@ if page == "Pro Prediction":
         if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not (st.session_state.is_pro or st.session_state.usage_left > 0)):
             # Persistent DB update before showing results
             if not st.session_state.is_pro:
-                # Calculate new count: current used + 1
-                new_used_count = (3 - st.session_state.usage_left) + 1
+                # Force update current count
+                current_used = 3 - st.session_state.usage_left
+                new_used_count = current_used + 1
+                
+                # Execute DB Update
                 supabase.table("prediction_logs").update({"usage_count": new_used_count}).eq("user_id", st.session_state.user.id).execute()
-                st.session_state.usage_left -= 1
+                
+                # RE-SYNC TO FETCH FRESH COUNT
+                sync_user_data(st.session_state.user)
             
             with st.spinner("Analyzing variables..."):
                 time.sleep(1)
@@ -411,4 +415,13 @@ elif page == "Hall of Fame":
     with t1: st.dataframe(get_batting_stats(balls_df).head(50), use_container_width=True, hide_index=True)
     with t2: st.dataframe(get_bowling_stats(balls_df).head(50), use_container_width=True, hide_index=True)
 
-st.markdown("<div class='disclaimer-box'><strong>Legal Disclaimer:</strong> Independent fan project. Predictions are probabilistic and for entertainment only.</div>", unsafe_allow_html=True)
+# --- RESTORED ORIGINAL DETAILED DISCLAIMER ---
+st.markdown("""
+<div class='disclaimer-box'>
+    <strong>Legal Disclaimer:</strong> This platform is an independent fan-developed project and is 
+    NOT affiliated, associated, authorized, endorsed by, or in any way officially connected with 
+    the Pakistan Super League (PSL), the Pakistan Cricket Board (PCB), or any of its teams. 
+    Predictions are generated using historical data and machine learning; they do not guarantee 
+    outcomes and should be used for entertainment/insight purposes only.
+</div>
+""", unsafe_allow_html=True)

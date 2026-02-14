@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+import pd as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
@@ -120,6 +120,14 @@ def validate_identifier(identifier):
     if re.match(r'^03\d{9}$', identifier): return True
     if re.match(r'^051\d{7}$', identifier): return True
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
+    return False
+
+def validate_email(email):
+    return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
+
+def validate_phone(phone):
+    if re.match(r'^03\d{9}$', phone): return True
+    if re.match(r'^051\d{7}$', phone): return True
     return False
 
 # --- DATA LOADING ---
@@ -266,7 +274,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_identifier(identifier):
                     try:
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                        # Check Email Verification
                         if res.user and res.user.email_confirmed_at is None:
                             st.error("Please verify your email before logging in.")
                             supabase.auth.sign_out()
@@ -289,17 +296,20 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
 
         elif st.session_state.auth_view == "signup":
             st.subheader("Create Account")
-            new_id = st.text_input("Email / Mobile")
+            new_email = st.text_input("Email (Required for Verification)")
+            new_mobile = st.text_input("Mobile Number (03xx or 051xxx)")
             new_pass = st.text_input("New Password", type="password")
             
             if st.button("Register", use_container_width=True):
-                if validate_identifier(new_id):
+                if validate_email(new_email) and validate_phone(new_mobile):
                     try:
-                        res = supabase.auth.sign_up({"email": new_id, "password": new_pass})
+                        # Register with Email to trigger 2-Factor/Verification
+                        res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                         if res.user:
+                            # Save the mobile number as the identifier for future logins
                             supabase.table("prediction_logs").insert({
                                 "user_id": res.user.id, 
-                                "user_identifier": new_id, 
+                                "user_identifier": new_mobile, 
                                 "usage_count": 0, 
                                 "is_pro": False
                             }).execute()
@@ -308,7 +318,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                     except Exception as e:
                         st.error(f"Signup failed: {str(e)}")
                 else:
-                    st.error("Invalid format")
+                    st.error("Invalid Email or Mobile Format")
             if st.button("Back to Login"): st.session_state.auth_view = "login"; st.rerun()
 
         elif st.session_state.auth_view == "reset":

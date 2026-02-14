@@ -32,11 +32,8 @@ if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
-    # Mobile: 11 digits, starts with 03
     if re.match(r'^03\d{9}$', identifier): return True
-    # Landline: 10 digits, starts with 051
     if re.match(r'^051\d{7}$', identifier): return True
-    # Email
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
@@ -44,13 +41,11 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
-    # Mobile: 11 digits max, 03xx
     if re.match(r'^03\d{9}$', phone): return True
-    # Landline: 10 digits max, 051xxx
     if re.match(r'^051\d{7}$', phone): return True
     return False
 
-# Premium UI Polish (PRESERVED EXACTLY)
+# Premium UI Polish
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -251,7 +246,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                             st.session_state.user = res.user
                             st.rerun()
                     except: st.error("Login Failed")
-                else: st.error("Check Format (03xx 11-digit / 051xx 10-digit)")
+                else: st.error("Check Format (03xx / 051xx)")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
@@ -264,7 +259,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                         supabase.auth.sign_up({"email": e, "password": p})
                         st.success("Check Email"); st.session_state.auth_view = "login"
                     except: st.error("Error creating account")
-                else: st.error("Invalid Format: Mobile (03xx, 11 digits) or Landline (051, 10 digits)")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
@@ -357,6 +351,7 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
+                # Update usage log before running simulation
                 if supabase:
                     try:
                         check = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
@@ -390,7 +385,7 @@ elif page == "Pro Prediction":
                     
                     probs = model.predict_proba(input_data)[0]
                     t1_prob = round(probs[1] * 100, 1)
-                    t2_prob = 100 - t1_prob
+                    t2_prob = round(100 - t1_prob, 1)
                     
                     st.markdown("### AI Predicted Probability")
                     res1, res2 = st.columns(2)

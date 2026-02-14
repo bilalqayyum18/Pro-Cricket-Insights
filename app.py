@@ -245,33 +245,43 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             st.subheader("Login")
             identifier = st.text_input("Email / Mobile / Landline", help="Supports 03xx (11 digits) or 051 (10 digits)")
             password = st.text_input("Password", type="password")
-            if st.button("Sign In", use_container_width=True):
-                if validate_identifier(identifier):
-                    if supabase:
-                        try:
-                            res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                            
-                            if res.session: 
-                                st.session_state.user = res.user
-                                st.session_state.access_token = res.session.access_token
-                                supabase.postgrest.auth(res.session.access_token)
+            
+            # Form button columns
+            col_login, col_pro = st.columns(2)
+            
+            with col_login:
+                if st.button("Sign In", use_container_width=True):
+                    if validate_identifier(identifier):
+                        if supabase:
+                            try:
+                                res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                                 
-                                # Fetch Pro Status from prediction_logs (acting as profile)
-                                profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).maybe_single().execute()
-                                if profile_res.data:
-                                    st.session_state.is_pro = profile_res.data.get('is_pro', False)
-                                
-                                st.success("Logged in successfully!")
-                                st.rerun()
-                            else:
-                                st.error("Invalid Credentials")
-                        except Exception as e: 
-                            st.error(f"Login Failed: {str(e)}")
-                    else:
-                        st.error("Supabase connection not established.")
-                else: 
-                    st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
+                                if res.session: 
+                                    st.session_state.user = res.user
+                                    st.session_state.access_token = res.session.access_token
+                                    supabase.postgrest.auth(res.session.access_token)
+                                    
+                                    # Fetch Pro Status from prediction_logs (acting as profile)
+                                    profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).maybe_single().execute()
+                                    if profile_res.data:
+                                        st.session_state.is_pro = profile_res.data.get('is_pro', False)
+                                    
+                                    st.success("Logged in successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("Invalid Credentials")
+                            except Exception as e: 
+                                st.error(f"Login Failed: {str(e)}")
+                        else:
+                            st.error("Supabase connection not established.")
+                    else: 
+                        st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
+            
+            with col_pro:
+                st.link_button("Request Pro Access", "https://forms.gle/pQSrUN1TcXdTD4nXA", use_container_width=True)
+
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
+            
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
             e = st.text_input("Email")

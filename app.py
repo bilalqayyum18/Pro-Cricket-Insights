@@ -34,7 +34,6 @@ if 'is_pro' not in st.session_state: st.session_state.is_pro = False
 if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
 # --- PERSIST AUTH CONTEXT ---
-# This ensures the header is set every time the script reruns
 if st.session_state.access_token and supabase:
     supabase.postgrest.auth(st.session_state.access_token)
 
@@ -352,11 +351,9 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                # Force apply token before fetching current usage
                 if st.session_state.access_token:
                     supabase.postgrest.auth(st.session_state.access_token)
                 
-                # Check usage from prediction_logs table
                 res = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
                 if res.data:
                     count = res.data[0]['usage_count']
@@ -387,51 +384,48 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # Execute RPC call with valid token
+                # Execute RPC call
                 if supabase:
                     try:
                         if st.session_state.access_token:
                             supabase.postgrest.auth(st.session_state.access_token)
                         
-                        # Use the specific function name as per your SQL setup
-                        # Note: If your function is named increment_prediction_usage, keep this.
-                        # If you used 'increment_usage' from my previous reply, change it here.
+                        # Increment usage via the fixed RPC
                         supabase.rpc("increment_prediction_usage", {}).execute()
-                        
-                        # Update local state so counter updates without full page refresh
                         usage_left -= 1 
+                        
+                        with st.spinner("Analyzing historical variables..."):
+                            time.sleep(1)
+                            h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
+                            h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
+                            v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
+                            v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
+                            v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
+                            v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
+
+                            def live_form(team):
+                                rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
+                                return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
+                            
+                            input_data = pd.DataFrame({
+                                'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
+                                'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
+                                'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
+                                'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
+                            })
+                            
+                            probs = model.predict_proba(input_data)[0]
+                            t1_prob = round(probs[1] * 100, 1)
+                            t2_prob = round(100 - t1_prob, 1)
+                            
+                            st.markdown("### AI Predicted Probability")
+                            res1, res2 = st.columns(2)
+                            res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                            res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                            st.info(f"Simulations Remaining: {usage_left}")
+                            
                     except Exception as e: 
                         st.error(f"Database Error: {e}")
-
-                with st.spinner("Analyzing historical variables..."):
-                    time.sleep(1)
-                    h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
-                    h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
-                    v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
-                    v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
-                    v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
-                    v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
-
-                    def live_form(team):
-                        rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
-                        return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
-                    
-                    input_data = pd.DataFrame({
-                        'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
-                        'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
-                        'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
-                        'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
-                    })
-                    
-                    probs = model.predict_proba(input_data)[0]
-                    t1_prob = round(probs[1] * 100, 1)
-                    t2_prob = round(100 - t1_prob, 1)
-                    
-                    st.markdown("### AI Predicted Probability")
-                    res1, res2 = st.columns(2)
-                    res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    st.info(f"Simulations Remaining: {usage_left}")
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

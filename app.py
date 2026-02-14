@@ -11,12 +11,14 @@ from supabase import create_client, Client
 
 # --- SUPABASE CONNECTION ---
 supabase_status = "Disconnected"
-supabase = None
+supabase: Client = None
+
 try:
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"] 
-        supabase: Client = create_client(url, key)
+        # Create a persistent client instance
+        supabase = create_client(url, key)
         supabase_status = "Connected"
 except Exception as e:
     supabase_status = f"Error: {str(e)}"
@@ -32,6 +34,7 @@ if 'is_pro' not in st.session_state: st.session_state.is_pro = False
 if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
 # --- PERSIST AUTH CONTEXT ---
+# This ensures the header is set every time the script reruns
 if st.session_state.access_token and supabase:
     supabase.postgrest.auth(st.session_state.access_token)
 
@@ -250,14 +253,12 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                             # Standard Email Login
                             res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                             
-                            # Compatible handling for session/user extraction
-                            session = getattr(res, "session", None) or (res.get("data") if isinstance(res, dict) else None)
-                            user = getattr(res, "user", None) or (session.user if session and hasattr(session, 'user') else None)
-                            
-                            if res.user: 
+                            if res.session: 
                                 st.session_state.user = res.user
                                 st.session_state.access_token = res.session.access_token
+                                # IMPORTANT: Manually set auth header for the current client instance
                                 supabase.postgrest.auth(res.session.access_token)
+                                st.success("Logged in successfully!")
                                 st.rerun()
                             else:
                                 st.error("Invalid Credentials")
@@ -351,10 +352,11 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                # Force re-auth for this call
+                # Force apply token before fetching current usage
                 if st.session_state.access_token:
                     supabase.postgrest.auth(st.session_state.access_token)
                 
+                # Check usage from prediction_logs table
                 res = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
                 if res.data:
                     count = res.data[0]['usage_count']
@@ -390,7 +392,12 @@ elif page == "Pro Prediction":
                     try:
                         if st.session_state.access_token:
                             supabase.postgrest.auth(st.session_state.access_token)
+                        
+                        # Use the specific function name as per your SQL setup
+                        # Note: If your function is named increment_prediction_usage, keep this.
+                        # If you used 'increment_usage' from my previous reply, change it here.
                         supabase.rpc("increment_prediction_usage", {}).execute()
+                        
                         # Update local state so counter updates without full page refresh
                         usage_left -= 1 
                     except Exception as e: 

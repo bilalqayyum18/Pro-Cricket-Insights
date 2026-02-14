@@ -28,7 +28,7 @@ st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="
 if 'user' not in st.session_state: st.session_state.user = None
 if 'usage_left' not in st.session_state: st.session_state.usage_left = 0
 if 'is_pro' not in st.session_state: st.session_state.is_pro = False
-if 'auth_view' not in st.session_state: st.session_state.auth_view = "login" # login, signup, reset
+if 'auth_view' not in st.session_state: st.session_state.auth_view = "login" 
 
 # Premium UI Polish (CSS Only)
 st.markdown("""
@@ -243,17 +243,30 @@ def get_inning_scorecard(df, innings_no):
 
 # --- AUTHENTICATION HELPERS ---
 def sync_user_data(user):
+    """Checks if record exists, if not creates it (Lazy Init), then syncs state."""
     if supabase and user:
         try:
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
+            
+            # If user exists in table, sync them
             if res.data and len(res.data) > 0:
                 st.session_state.is_pro = res.data[0]['is_pro']
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
                 return True
             else:
-                return False
-        except Exception: 
-            st.session_state.usage_left = 0
+                # LAZY INITIALIZATION: Create the row now because it doesn't exist
+                # We use a generic identifier for the table row if it wasn't captured at signup
+                supabase.table("prediction_logs").insert({
+                    "user_id": user.id, 
+                    "user_identifier": user.email, 
+                    "usage_count": 0, 
+                    "is_pro": False
+                }).execute()
+                st.session_state.is_pro = False
+                st.session_state.usage_left = 3
+                return True
+        except Exception as e: 
+            st.error(f"Sync error: {e}")
             return False
     return False
 
@@ -273,17 +286,15 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_identifier(identifier):
                     try:
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                        if res.user and res.user.email_confirmed_at is None:
-                            st.error("Please verify your email before logging in.")
-                            supabase.auth.sign_out()
-                        elif res.user:
-                            st.session_state.user = res.user
+                        if res.user:
+                            # Verify if email is confirmed if your Supabase settings require it
+                            if res.user.email_confirmed_at is None:
+                                st.warning("Please check your email to verify your account.")
+                            
+                            # Sync/Initialize the user record in prediction_logs
                             if sync_user_data(res.user):
+                                st.session_state.user = res.user
                                 st.rerun()
-                            else:
-                                supabase.auth.sign_out()
-                                st.session_state.user = None
-                                st.error("Account not initialized. Please Sign Up.")
                     except Exception as e:
                         st.error("Invalid Credentials or Unverified Email")
                 else:
@@ -302,15 +313,11 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Register", use_container_width=True):
                 if validate_email(new_email) and validate_phone(new_mobile):
                     try:
+                        # Step 1: Just handle the Auth registration
                         res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                         if res.user:
-                            supabase.table("prediction_logs").insert({
-                                "user_id": res.user.id, 
-                                "user_identifier": new_mobile, 
-                                "usage_count": 0, 
-                                "is_pro": False
-                            }).execute()
-                            st.success("Verification email sent! Please check your inbox.")
+                            st.success("Registration successful! Check your email for a verification link.")
+                            st.info("Once verified, you can log in.")
                             st.session_state.auth_view = "login"
                     except Exception as e:
                         st.error(f"Signup failed: {str(e)}")

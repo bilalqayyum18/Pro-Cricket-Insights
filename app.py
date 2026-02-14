@@ -1,5 +1,5 @@
 import streamlit as st
-import pd as pd
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
@@ -264,7 +264,6 @@ page = st.sidebar.radio("Navigation", ["Pro Prediction", "Season Dashboard", "Fa
 # --- SUPABASE AUTH SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
-        # Toggle Views: Login / SignUp / Reset
         if st.session_state.auth_view == "login":
             st.subheader("Login")
             identifier = st.text_input("Email / Mobile", placeholder="03xx or email")
@@ -303,10 +302,8 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Register", use_container_width=True):
                 if validate_email(new_email) and validate_phone(new_mobile):
                     try:
-                        # Register with Email to trigger 2-Factor/Verification
                         res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                         if res.user:
-                            # Save the mobile number as the identifier for future logins
                             supabase.table("prediction_logs").insert({
                                 "user_id": res.user.id, 
                                 "user_identifier": new_mobile, 

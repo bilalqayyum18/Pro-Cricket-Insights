@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 import time
+import re
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
@@ -121,6 +122,19 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
+# --- VALIDATION LOGIC ---
+def validate_identifier(identifier):
+    # Mobile: 11 digits, starts with 03
+    if re.match(r'^03\d{9}$', identifier):
+        return True
+    # Landline: 10 digits, starts with 051
+    if re.match(r'^051\d{7}$', identifier):
+        return True
+    # Email: Standard format
+    if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier):
+        return True
+    return False
+
 # --- DATA LOADING ---
 @st.cache_data
 def load_data():
@@ -234,17 +248,25 @@ def get_inning_scorecard(df, innings_no):
 
 # --- AUTHENTICATION HELPERS ---
 def sync_user_data(user):
+    """Checks if user exists in DB; creates entry if missing."""
     if supabase and user:
         try:
-            # We use user.id (UUID from Auth) to link to logs
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
-            if res.data:
+            if res.data and len(res.data) > 0:
                 st.session_state.is_pro = res.data[0]['is_pro']
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
             else:
+                # Auto-create entry if it doesn't exist (Fixes deletion issue)
+                supabase.table("prediction_logs").insert({
+                    "user_id": user.id, 
+                    "user_identifier": user.email, 
+                    "usage_count": 0, 
+                    "is_pro": False
+                }).execute()
                 st.session_state.is_pro = False
                 st.session_state.usage_left = 3
-        except Exception: pass
+        except Exception: 
+            st.session_state.usage_left = 0
 
 # --- NAVIGATION ---
 st.sidebar.title("Cricket Intelligence")
@@ -253,28 +275,33 @@ page = st.sidebar.radio("Navigation", ["Pro Prediction", "Season Dashboard", "Fa
 # --- SUPABASE AUTH SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
-        email = st.text_input("Email", placeholder="email@example.com")
+        identifier = st.text_input("Email / Mobile", placeholder="03xx or email")
         password = st.text_input("Password", type="password")
         col_login, col_signup = st.columns(2)
         
         if col_login.button("Login"):
-            try:
-                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.user = res.user
-                sync_user_data(res.user)
-                st.rerun()
-            except Exception as e: st.error("Invalid Credentials")
+            if validate_identifier(identifier):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
+                    st.session_state.user = res.user
+                    sync_user_data(res.user)
+                    st.rerun()
+                except Exception: st.error("Invalid Credentials")
+            else: st.error("Invalid format (03xx / 051xx / email)")
             
         if col_signup.button("Sign Up"):
-            try:
-                supabase.auth.sign_up({"email": email, "password": password})
-                st.success("Verification link sent! Check your inbox.")
-            except Exception as e: st.error("Signup failed.")
+            if validate_identifier(identifier):
+                try:
+                    supabase.auth.sign_up({"email": identifier, "password": password})
+                    st.success("Verification link sent! Check your inbox.")
+                except Exception: st.error("Signup failed.")
+            else: st.error("Invalid format")
     else:
         st.write(f"Logged in: {st.session_state.user.email}")
         if st.button("Logout"):
             supabase.auth.sign_out()
             st.session_state.user = None
+            st.session_state.is_pro = False
             st.rerun()
 
 st.sidebar.markdown(f"**Connection:** {supabase_status}")
@@ -286,7 +313,7 @@ if page == "Pro Prediction":
     if not st.session_state.user:
         st.warning("Please Login or Sign Up via the sidebar to access AI Predictions.")
     else:
-        # Dynamic Header - Updates without refresh
+        # Dynamic Header
         if st.session_state.is_pro:
             st.success("💎 PRO ACCOUNT | Unlimited Simulations Enabled")
         else:
@@ -312,29 +339,32 @@ if page == "Pro Prediction":
         can_run = st.session_state.is_pro or st.session_state.usage_left > 0
         
         if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not can_run):
-            # 1. IMMEDIATE DB UPDATE & STATE CHANGE
+            # 1. IMMEDIATE DB UPDATE
             if not st.session_state.is_pro:
                 try:
                     current_usage = 3 - st.session_state.usage_left
                     new_count = current_usage + 1
-                    # Update local state first for instant UI feedback
-                    st.session_state.usage_left -= 1
-                    # Upsert to DB using actual User ID
+                    
+                    # Update DB first to ensure monetization
                     supabase.table("prediction_logs").upsert({
                         "user_id": st.session_state.user.id, 
                         "user_identifier": st.session_state.user.email,
                         "usage_count": new_count
                     }).execute()
-                except Exception as e: st.error(f"Sync error: {e}")
+                    
+                    # Update local state
+                    st.session_state.usage_left -= 1
+                except Exception as e: 
+                    st.error(f"Sync error: {e}")
+                    st.stop()
 
-            # 2. VISUAL PROCESSING DELAY (Professional Feel)
+            # 2. VISUAL PROCESSING
             with st.spinner("Processing deep-learning variables..."):
                 progress_bar = st.progress(0)
                 for percent in range(100):
-                    time.sleep(0.01) # 1 second total delay
+                    time.sleep(0.01)
                     progress_bar.progress(percent + 1)
                 
-                # Feature Extraction Logic (Preserved)
                 h2h_matches = matches_df[((matches_df['team1'] == t1) & (matches_df['team2'] == t2)) | ((matches_df['team1'] == t2) & (matches_df['team2'] == t1))]
                 h2h_val = len(h2h_matches[h2h_matches['winner'] == t1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
                 v_t1_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t1)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
@@ -355,12 +385,12 @@ if page == "Pro Prediction":
                 t1_prob = round(probs[1] * 100, 1)
                 t2_prob = 100 - t1_prob
 
-            # 3. DISPLAY RESULTS (Will remain visible)
+            # 3. DISPLAY RESULTS
             st.markdown("### AI Predicted Probability")
             res1, res2 = st.columns(2)
             res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
             res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-            st.toast("Simulation complete. Simulation count updated.")
+            st.toast("Simulation complete. Count updated.")
 
         elif not can_run:
             st.error("Free Limit Reached. Contact admin to upgrade to PRO.")

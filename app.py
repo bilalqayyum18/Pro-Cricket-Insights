@@ -1,5 +1,5 @@
 import streamlit as st
-import pd
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
@@ -292,16 +292,10 @@ if page == "Pro Prediction":
             st.markdown("</div>", unsafe_allow_html=True)
 
         if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not (st.session_state.is_pro or st.session_state.usage_left > 0)):
-            # Persistent DB update before showing results
             if not st.session_state.is_pro:
-                # Force update current count
                 current_used = 3 - st.session_state.usage_left
                 new_used_count = current_used + 1
-                
-                # Execute DB Update
                 supabase.table("prediction_logs").update({"usage_count": new_used_count}).eq("user_id", st.session_state.user.id).execute()
-                
-                # RE-SYNC TO FETCH FRESH COUNT
                 sync_user_data(st.session_state.user)
             
             with st.spinner("Analyzing variables..."):
@@ -326,6 +320,7 @@ if page == "Pro Prediction":
             res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{p1}%</h1>Win Probability</div>", unsafe_allow_html=True)
             res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{100-p1}%</h1>Win Probability</div>", unsafe_allow_html=True)
 
+# (Other pages Match Center, Dashboard, etc. remain unchanged)
 elif page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))

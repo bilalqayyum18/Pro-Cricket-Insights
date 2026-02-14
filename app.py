@@ -1,5 +1,4 @@
 import streamlit as st
-import pd
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -194,7 +193,6 @@ def get_inning_scorecard(df, innings_no):
 def sync_user_data(user):
     if supabase and user:
         try:
-            # We use a simple select. RLS ensures we only get OUR row.
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
             
             if res.data and len(res.data) > 0:
@@ -202,7 +200,6 @@ def sync_user_data(user):
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
                 return True
             else:
-                # If row is missing, create it.
                 try:
                     supabase.table("prediction_logs").insert({
                         "user_id": user.id, "user_identifier": user.email, "usage_count": 0, "is_pro": False
@@ -211,7 +208,6 @@ def sync_user_data(user):
                     st.session_state.usage_left = 3
                     return True
                 except Exception as e:
-                    # Likely a foreign key race condition; tell user to retry login
                     st.error("Account initializing. Please click 'Sign In' once more.")
                     return False
         except Exception as e:
@@ -234,7 +230,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Sign In", use_container_width=True):
                 if validate_identifier(identifier):
                     try:
-                        # Attempt sign in
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                         if res.user:
                             if sync_user_data(res.user):
@@ -324,7 +319,6 @@ if page == "Pro Prediction":
             res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{p1}%</h1>Win Probability</div>", unsafe_allow_html=True)
             res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{100-p1}%</h1>Win Probability</div>", unsafe_allow_html=True)
 
-# ... Other pages (Season Dashboard, Fantasy Scout, Match Center, etc.) remain identical to your current code ...
 elif page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))

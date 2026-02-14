@@ -26,13 +26,17 @@ st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="
 
 # --- INITIALIZE SESSION STATE ---
 if 'user' not in st.session_state: st.session_state.user = None
+if 'access_token' not in st.session_state: st.session_state.access_token = None
 if 'usage_left' not in st.session_state: st.session_state.usage_left = 3
 if 'is_pro' not in st.session_state: st.session_state.is_pro = False
 if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
+# --- PERSIST AUTH CONTEXT ---
+if st.session_state.access_token and supabase:
+    supabase.postgrest.auth(st.session_state.access_token)
+
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
-    # Validates Email OR Mobile (03xx, 11 digits) OR Landline (051xxx, 10 digits)
     if re.match(r'^03\d{9}$', identifier): return True
     if re.match(r'^051\d{7}$', identifier): return True
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
@@ -42,7 +46,6 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
-    # Strict validation for 03xx (11 digits) or 051 (10 digits)
     if re.match(r'^03\d{9}$', phone): return True
     if re.match(r'^051\d{7}$', phone): return True
     return False
@@ -244,20 +247,24 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_identifier(identifier):
                     if supabase:
                         try:
-                            # Use identifier as email for sign-in logic
+                            # Standard Email Login
                             res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
+                            
+                            # Compatible handling for session/user extraction
+                            session = getattr(res, "session", None) or (res.get("data") if isinstance(res, dict) else None)
+                            user = getattr(res, "user", None) or (session.user if session and hasattr(session, 'user') else None)
+                            
                             if res.user: 
                                 st.session_state.user = res.user
-                                token = res.session.access_token
-                                # Set auth for subsequent calls
-                                supabase.postgrest.auth(token)
+                                st.session_state.access_token = res.session.access_token
+                                supabase.postgrest.auth(res.session.access_token)
                                 st.rerun()
                             else:
                                 st.error("Invalid Credentials")
                         except Exception as e: 
                             st.error(f"Login Failed: {str(e)}")
                     else:
-                        st.error("Supabase connection not established. Check your secrets.")
+                        st.error("Supabase connection not established.")
                 else: 
                     st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
@@ -270,7 +277,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_email(e) and validate_phone(m):
                     if supabase:
                         try:
-                            # Note: Supabase uses email for auth. Phone can be stored in metadata.
                             res = supabase.auth.sign_up({"email": e, "password": p, "options": {"data": {"phone_number": m}}})
                             st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
                         except Exception as ex: 
@@ -286,6 +292,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if supabase:
                 supabase.auth.sign_out()
             st.session_state.user = None
+            st.session_state.access_token = None
             st.rerun()
 
 # --- PAGE LOGIC ---
@@ -344,6 +351,10 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
+                # Force re-auth for this call
+                if st.session_state.access_token:
+                    supabase.postgrest.auth(st.session_state.access_token)
+                
                 res = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
                 if res.data:
                     count = res.data[0]['usage_count']
@@ -374,9 +385,14 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
+                # Execute RPC call with valid token
                 if supabase:
                     try:
-                        supabase.rpc("increment_prediction_usage").execute()
+                        if st.session_state.access_token:
+                            supabase.postgrest.auth(st.session_state.access_token)
+                        supabase.rpc("increment_prediction_usage", {}).execute()
+                        # Update local state so counter updates without full page refresh
+                        usage_left -= 1 
                     except Exception as e: 
                         st.error(f"Database Error: {e}")
 
@@ -408,9 +424,7 @@ elif page == "Pro Prediction":
                     res1, res2 = st.columns(2)
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                
-                # Note: st.rerun() here would wipe the prediction result immediately. 
-                # Removed or placed after user views results.
+                    st.info(f"Simulations Remaining: {usage_left}")
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

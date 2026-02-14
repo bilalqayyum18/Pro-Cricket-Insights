@@ -117,11 +117,8 @@ st.markdown("""
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
-    # Mobile: 03xx (11 digits)
     if re.match(r'^03\d{9}$', identifier): return True
-    # Landline: 051xxx (10 digits)
     if re.match(r'^051\d{7}$', identifier): return True
-    # Email
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
@@ -256,16 +253,23 @@ def sync_user_data(user):
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
                 return True
             else:
-                # User authenticated via Supabase but missing in our logs table
-                supabase.table("prediction_logs").insert({
-                    "user_id": user.id, 
-                    "user_identifier": user.email, 
-                    "usage_count": 0, 
-                    "is_pro": False
-                }).execute()
-                st.session_state.is_pro = False
-                st.session_state.usage_left = 3
-                return True
+                # Use a secondary check/delay or try-except for the foreign key issue
+                try:
+                    supabase.table("prediction_logs").insert({
+                        "user_id": user.id, 
+                        "user_identifier": user.email, 
+                        "usage_count": 0, 
+                        "is_pro": False
+                    }).execute()
+                    st.session_state.is_pro = False
+                    st.session_state.usage_left = 3
+                    return True
+                except Exception as db_err:
+                    if "23503" in str(db_err):
+                        st.info("Account verified! Finalizing setup... Please click Sign In again.")
+                    else:
+                        st.error(f"Log Error: {db_err}")
+                    return False
         except Exception as e: 
             st.error(f"Sync error: {e}")
             return False
@@ -286,15 +290,12 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Sign In", use_container_width=True):
                 if validate_identifier(identifier):
                     try:
-                        # Supabase handles the password check against their Auth table.
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                         if res.user:
-                            # Only if password is correct, we sync/init their tracking row
                             if sync_user_data(res.user):
                                 st.session_state.user = res.user
                                 st.rerun()
                     except Exception as e:
-                        # This triggers if credentials don't exist or password is wrong
                         st.error("Invalid Credentials or Unverified Email")
                 else:
                     st.error("Invalid Format (Mobile: 11 digits, Landline: 10 digits)")
@@ -312,23 +313,16 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Register", use_container_width=True):
                 if validate_email(new_email) and validate_phone(new_mobile):
                     try:
-                        # Step 1: Register in Auth
+                        # Register in Auth - Note: Row in logs is created upon first successful login/sync
                         res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                         if res.user:
-                            # Step 2: Pre-create the log entry so it exists
-                            supabase.table("prediction_logs").insert({
-                                "user_id": res.user.id,
-                                "user_identifier": new_mobile,
-                                "usage_count": 0,
-                                "is_pro": False
-                            }).execute()
-                            
                             st.success("Registration successful! Check your email for verification.")
+                            st.info("After verifying, come back and Sign In.")
                             st.session_state.auth_view = "login"
                     except Exception as e:
                         st.error(f"Signup failed: {str(e)}")
                 else:
-                    st.error("Invalid Format. Mobile must be 11 digits (03xx) and Landline 10 (051xx).")
+                    st.error("Invalid Format. Mobile: 11 digits (03xx), Landline: 10 (051xx).")
             if st.button("Back to Login"): st.session_state.auth_view = "login"; st.rerun()
 
         elif st.session_state.auth_view == "reset":

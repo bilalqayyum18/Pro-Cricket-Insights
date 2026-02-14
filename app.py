@@ -9,19 +9,17 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 
 # --- SUPABASE CONNECTION ---
-# This looks for SUPABASE_URL and SUPABASE_KEY in your Streamlit Secrets
+# Cleaned up to show simple connection status
 supabase_status = "Disconnected"
+supabase = None
 try:
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         supabase: Client = create_client(url, key)
         supabase_status = "Connected"
-    else:
-        supabase = None
-except Exception as e:
-    supabase = None
-    supabase_status = f"Error: {str(e)}"
+except Exception:
+    supabase_status = "Disconnected"
 
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="🏏")
@@ -119,7 +117,7 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- DATA LOADING (Unchanged) ---
+# --- DATA LOADING ---
 @st.cache_data
 def load_data():
     matches = pd.read_csv("psl_matches_meta_clean.csv")
@@ -130,7 +128,7 @@ def load_data():
 
 matches_df, balls_df = load_data()
 
-# --- ML MODEL ENGINE (Unchanged) ---
+# --- ML MODEL ENGINE ---
 @st.cache_resource
 def train_ml_model(df):
     model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']].dropna().sort_values('date')
@@ -181,7 +179,7 @@ def train_ml_model(df):
     
     return model, le_team, le_venue, le_decision
 
-# --- ANALYTICS ENGINES (Unchanged) ---
+# --- ANALYTICS ENGINES ---
 def get_batting_stats(df):
     if df.empty: return pd.DataFrame()
     bat = df.groupby('batter').agg({'runs_batter': 'sum', 'ball': 'count', 'wide': 'sum', 'match_id': 'nunique', 'is_wicket': 'sum'}).reset_index()
@@ -234,9 +232,8 @@ def get_inning_scorecard(df, innings_no):
 st.sidebar.title("Cricket Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
 
-# --- SUPABASE STATUS IN SIDEBAR ---
-with st.sidebar.expander("🛠️ Connection Status"):
-    st.write(f"Supabase: {supabase_status}")
+# --- UPDATED CONNECTION STATUS ---
+st.sidebar.markdown(f"**Connection:** {supabase_status}")
 
 # --- PAGE LOGIC ---
 if page == "Match Center":
@@ -283,86 +280,102 @@ if page == "Match Center":
 elif page == "Pro Prediction":
     st.title("AI Match Predictor")
     
-    # --- USAGE TRACKING LOGIC ---
-    user_id = "guest_session_001"
-    can_predict, usage_left = True, 3
+    # --- USER AUTHENTICATION SECTION ---
+    with st.sidebar.expander("👤 User Account", expanded=True):
+        user_id = st.text_input("Enter Mobile/Email to Login", placeholder="03xxxxxxxxx")
     
-    if supabase:
+    can_predict, usage_left, is_pro = False, 0, False
+    
+    if not user_id:
+        st.warning("Please enter your Identifier in the sidebar to start simulations.")
+    elif supabase:
         try:
-            res = supabase.table("prediction_logs").select("usage_count").eq("user_ip", user_id).execute()
+            # Check user in DB
+            res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_identifier", user_id).execute()
             if res.data:
                 count = res.data[0]['usage_count']
-                usage_left = max(0, 3 - count)
-                if count >= 3: can_predict = False
+                is_pro = res.data[0]['is_pro']
+                
+                if is_pro:
+                    can_predict = True
+                    st.success(f"PRO Account: {user_id} | Unlimited Access")
+                else:
+                    usage_left = max(0, 3 - count)
+                    if count >= 3:
+                        can_predict = False
+                        st.error("Free Limit Reached: You have used your 3 free simulations. Contact admin to upgrade to PRO.")
+                    else:
+                        can_predict = True
+                        st.info(f"Free Simulations Remaining: {usage_left}")
+            else:
+                # New User
+                usage_left = 3
+                can_predict = True
+                st.info(f"Free Simulations Remaining: {usage_left}")
         except Exception as e:
-            st.sidebar.error(f"Read Error: {e}")
+            st.error(f"Error checking status: {e}")
 
-    if not can_predict:
-        st.error("Account Limit: You have reached 3 simulations today. Upgrade to PRO for unlimited access.")
-    else:
-        st.info(f"Account: {user_id} | {usage_left} Simulations Remaining Today.")
-        
+    if can_predict:
         model, le_t, le_v, le_d = train_ml_model(matches_df)
         
         with st.container():
             st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                team1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
+                t1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
             with col2:
-                team2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != team1])
+                t2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != t1])
             with col3:
-                venue = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
+                v = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
             with col4:
-                toss_winner = st.selectbox("Toss Winner", [team1, team2])
+                tw = st.selectbox("Toss Winner", [t1, t2])
                 
-            toss_decision = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
+            td = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        if st.button("RUN PRO SIMULATION", use_container_width=True):
-            # Update Database First
-            if supabase:
-                try:
-                    check = supabase.table("prediction_logs").select("usage_count").eq("user_ip", user_id).execute()
-                    if check.data:
-                        new_count = check.data[0]['usage_count'] + 1
-                        supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_ip", user_id).execute()
-                    else:
-                        supabase.table("prediction_logs").insert({"user_ip": user_id, "usage_count": 1}).execute()
-                except Exception as e:
-                    st.error(f"Log error: {e}")
+            if st.button("RUN PRO SIMULATION", use_container_width=True):
+                # Update Database
+                if supabase and not is_pro:
+                    try:
+                        check = supabase.table("prediction_logs").select("usage_count").eq("user_identifier", user_id).execute()
+                        if check.data:
+                            new_count = check.data[0]['usage_count'] + 1
+                            supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_identifier", user_id).execute()
+                        else:
+                            supabase.table("prediction_logs").insert({"user_identifier": user_id, "usage_count": 1}).execute()
+                    except Exception as e:
+                        st.error(f"Log error: {e}")
 
-            with st.spinner("Analyzing historical variables..."):
-                time.sleep(1)
-                h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
-                h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
-                v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
-                v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
-                v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
-                v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
+                with st.spinner("Analyzing variables..."):
+                    time.sleep(1)
+                    # Feature Extraction Logic
+                    h2h_matches = matches_df[((matches_df['team1'] == t1) & (matches_df['team2'] == t2)) | ((matches_df['team1'] == t2) & (matches_df['team2'] == t1))]
+                    h2h_val = len(h2h_matches[h2h_matches['winner'] == t1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
+                    v_t1_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t1)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
+                    v_t2_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t2)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
+                    
+                    def live_form(team):
+                        rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
+                        return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
 
-                def live_form(team):
-                    rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
-                    return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
-                
-                input_data = pd.DataFrame({
-                    'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
-                    'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
-                    'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
-                    'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
-                })
-                
-                probs = model.predict_proba(input_data)[0]
-                t1_prob = round(probs[1] * 100, 1)
-                t2_prob = 100 - t1_prob
-                
-                st.markdown("### AI Predicted Probability")
-                res1, res2 = st.columns(2)
-                res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                
-                # Refresh UI to show updated count
-                st.rerun()
+                    input_data = pd.DataFrame({
+                        'team1': le_t.transform([t1]), 'team2': le_t.transform([t2]),
+                        'venue': le_v.transform([v]), 'toss_winner': le_t.transform([tw]),
+                        'toss_decision': le_d.transform([td]), 'h2h': [h2h_val],
+                        'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(t1)], 'form_t2': [live_form(t2)]
+                    })
+                    
+                    probs = model.predict_proba(input_data)[0]
+                    t1_prob = round(probs[1] * 100, 1)
+                    t2_prob = 100 - t1_prob
+                    
+                    st.markdown("### AI Predicted Probability")
+                    res1, res2 = st.columns(2)
+                    res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                    res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                    
+                    if not is_pro:
+                        st.rerun()
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -435,7 +448,7 @@ elif page == "Hall of Fame":
     with t1: st.dataframe(get_batting_stats(balls_df).head(50), use_container_width=True, hide_index=True)
     with t2: st.dataframe(get_bowling_stats(balls_df).head(50), use_container_width=True, hide_index=True)
 
-# --- GLOBAL LEGAL DISCLAIMER (Appears on every page) ---
+# --- GLOBAL LEGAL DISCLAIMER ---
 st.markdown("""
     <div class="disclaimer-box">
         <strong>Legal Disclaimer & Terms of Use:</strong><br>

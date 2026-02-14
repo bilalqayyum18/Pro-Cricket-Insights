@@ -32,8 +32,11 @@ if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
+    # Mobile: 11 digits, starts with 03
     if re.match(r'^03\d{9}$', identifier): return True
+    # Landline: 10 digits, starts with 051
     if re.match(r'^051\d{7}$', identifier): return True
+    # Email
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
@@ -41,7 +44,9 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
+    # Mobile: 11 digits max, 03xx
     if re.match(r'^03\d{9}$', phone): return True
+    # Landline: 10 digits max, 051xxx
     if re.match(r'^051\d{7}$', phone): return True
     return False
 
@@ -107,18 +112,14 @@ def load_data():
     matches['venue'] = matches['venue'].str.split(',').str[0]
     matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
     
-    # Ensure 'over' column exists for grouping
     if 'over' not in balls.columns:
         balls['over'] = balls['ball'].astype(int)
     
-    # FIX: Ensure 'venue' exists in balls_df for Venue Analysis
     if 'venue' not in balls.columns:
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map)
 
-    # FIX: Ensure 'extra_runs' exists (Sum of wides, noballs, byes, legbyes if not present)
     if 'extra_runs' not in balls.columns:
-        # Check if individual components exist, else assume 0
         w = balls['wide'] if 'wide' in balls.columns else 0
         nb = balls['noball'] if 'noball' in balls.columns else 0
         b = balls['byes'] if 'byes' in balls.columns else 0
@@ -198,7 +199,6 @@ def get_bowling_stats(df):
     bw = df[~df['wicket_kind'].isin(['run out', 'retired hurt', 'obstructing the field'])]
     wickets = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket': 'wickets'})
     df_c = df.copy()
-    # Handle missing noball column if necessary
     nb = df_c['noball'] if 'noball' in df_c.columns else 0
     df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + nb
     runs = df_c.groupby('bowler')['rc'].sum().reset_index()
@@ -251,7 +251,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                             st.session_state.user = res.user
                             st.rerun()
                     except: st.error("Login Failed")
-                else: st.error("Check Format (03xx / 051xx)")
+                else: st.error("Check Format (03xx 11-digit / 051xx 10-digit)")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
@@ -261,10 +261,10 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Create"):
                 if validate_email(e) and validate_phone(m):
                     try:
-                        # Since you are using mobile as email in Supabase potentially, or custom fields
                         supabase.auth.sign_up({"email": e, "password": p})
                         st.success("Check Email"); st.session_state.auth_view = "login"
                     except: st.error("Error creating account")
+                else: st.error("Invalid Format: Mobile (03xx, 11 digits) or Landline (051, 10 digits)")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
@@ -310,7 +310,6 @@ if page == "Match Center":
                 c1.markdown("**Batting**"); c1.dataframe(bt, use_container_width=True, hide_index=True)
                 c2.markdown("**Bowling**"); c2.dataframe(bl, use_container_width=True, hide_index=True)
 
-        # FIXED WORM CHART
         mb_c = mb.copy()
         mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
         worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
@@ -366,7 +365,8 @@ elif page == "Pro Prediction":
                             supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_id", user_id).execute()
                         else:
                             supabase.table("prediction_logs").insert({"user_id": user_id, "usage_count": 1}).execute()
-                    except Exception as e: st.error(f"Log error: {e}")
+                    except Exception as e: 
+                        st.error(f"RLS/Database Error: Ensure you have added the SQL Policy in Supabase Editor. Detail: {e}")
 
                 with st.spinner("Analyzing historical variables..."):
                     time.sleep(1)
@@ -396,7 +396,6 @@ elif page == "Pro Prediction":
                     res1, res2 = st.columns(2)
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    # Note: st.rerun() here would prevent seeing the result, removed it from the simulated logic but kept button state
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -457,7 +456,6 @@ elif page == "Venue Analysis":
     st.metric("Matches Hosted", int(len(vm)))
     st.metric("Defend Wins", int(len(vm[vm['win_by'] == 'runs'])))
     
-    # FIX: Calculated Average Score safely using the venue column mapped in load_data
     v_balls = balls_df[balls_df['venue'] == v]
     if not v_balls.empty:
         avg_score = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()

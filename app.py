@@ -28,6 +28,7 @@ st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="
 if 'user' not in st.session_state: st.session_state.user = None
 if 'usage_left' not in st.session_state: st.session_state.usage_left = 0
 if 'is_pro' not in st.session_state: st.session_state.is_pro = False
+if 'auth_view' not in st.session_state: st.session_state.auth_view = "login" # login, signup, reset
 
 # Premium UI Polish (CSS Only)
 st.markdown("""
@@ -234,25 +235,19 @@ def get_inning_scorecard(df, innings_no):
 
 # --- AUTHENTICATION HELPERS ---
 def sync_user_data(user):
-    """Checks if user exists in DB; creates/updates entry safely."""
     if supabase and user:
         try:
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
             if res.data and len(res.data) > 0:
                 st.session_state.is_pro = res.data[0]['is_pro']
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
+                return True
             else:
-                # Use UPSERT instead of INSERT to avoid duplicate key errors on race conditions
-                supabase.table("prediction_logs").upsert({
-                    "user_id": user.id, 
-                    "user_identifier": user.email if user.email else str(user.id), 
-                    "usage_count": 0, 
-                    "is_pro": False
-                }, on_conflict="user_id").execute()
-                st.session_state.is_pro = False
-                st.session_state.usage_left = 3
+                return False
         except Exception: 
             st.session_state.usage_left = 0
+            return False
+    return False
 
 # --- NAVIGATION ---
 st.sidebar.title("Cricket Intelligence")
@@ -261,30 +256,75 @@ page = st.sidebar.radio("Navigation", ["Pro Prediction", "Season Dashboard", "Fa
 # --- SUPABASE AUTH SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
-        identifier = st.text_input("Email / Mobile", placeholder="03xx or email")
-        password = st.text_input("Password", type="password")
-        col_login, col_signup = st.columns(2)
-        
-        if col_login.button("Login"):
-            if validate_identifier(identifier):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                    st.session_state.user = res.user
-                    sync_user_data(res.user)
-                    st.rerun()
-                except Exception: st.error("Invalid Credentials")
-            else: st.error("Invalid format (03xx / 051xx / email)")
+        # Toggle Views: Login / SignUp / Reset
+        if st.session_state.auth_view == "login":
+            st.subheader("Login")
+            identifier = st.text_input("Email / Mobile", placeholder="03xx or email")
+            password = st.text_input("Password", type="password")
             
-        if col_signup.button("Sign Up"):
-            if validate_identifier(identifier):
+            if st.button("Sign In", use_container_width=True):
+                if validate_identifier(identifier):
+                    try:
+                        res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
+                        # Check Email Verification
+                        if res.user and res.user.email_confirmed_at is None:
+                            st.error("Please verify your email before logging in.")
+                            supabase.auth.sign_out()
+                        elif res.user:
+                            st.session_state.user = res.user
+                            if sync_user_data(res.user):
+                                st.rerun()
+                            else:
+                                supabase.auth.sign_out()
+                                st.session_state.user = None
+                                st.error("Account not initialized. Please Sign Up.")
+                    except Exception as e:
+                        st.error("Invalid Credentials or Unverified Email")
+                else:
+                    st.error("Invalid Format")
+            
+            col_s, col_r = st.columns(2)
+            if col_s.button("New? Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
+            if col_r.button("Forgot Password?"): st.session_state.auth_view = "reset"; st.rerun()
+
+        elif st.session_state.auth_view == "signup":
+            st.subheader("Create Account")
+            new_id = st.text_input("Email / Mobile")
+            new_pass = st.text_input("New Password", type="password")
+            
+            if st.button("Register", use_container_width=True):
+                if validate_identifier(new_id):
+                    try:
+                        res = supabase.auth.sign_up({"email": new_id, "password": new_pass})
+                        if res.user:
+                            supabase.table("prediction_logs").insert({
+                                "user_id": res.user.id, 
+                                "user_identifier": new_id, 
+                                "usage_count": 0, 
+                                "is_pro": False
+                            }).execute()
+                            st.success("Verification email sent! Please check your inbox.")
+                            st.session_state.auth_view = "login"
+                    except Exception as e:
+                        st.error(f"Signup failed: {str(e)}")
+                else:
+                    st.error("Invalid format")
+            if st.button("Back to Login"): st.session_state.auth_view = "login"; st.rerun()
+
+        elif st.session_state.auth_view == "reset":
+            st.subheader("Reset Password")
+            reset_email = st.text_input("Enter Registered Email")
+            if st.button("Send Reset Link", use_container_width=True):
                 try:
-                    supabase.auth.sign_up({"email": identifier, "password": password})
-                    st.success("Verification link sent! Check your inbox.")
-                except Exception: st.error("Signup failed.")
-            else: st.error("Invalid format")
+                    supabase.auth.reset_password_for_email(reset_email)
+                    st.success("Password reset link sent to your email!")
+                except Exception as e:
+                    st.error("Failed to send reset link.")
+            if st.button("Back to Login"): st.session_state.auth_view = "login"; st.rerun()
+
     else:
         st.write(f"Logged in: {st.session_state.user.email}")
-        if st.button("Logout"):
+        if st.button("Logout", use_container_width=True):
             supabase.auth.sign_out()
             st.session_state.user = None
             st.session_state.is_pro = False
@@ -329,12 +369,9 @@ if page == "Pro Prediction":
                     current_usage = 3 - st.session_state.usage_left
                     new_count = current_usage + 1
                     
-                    # Fix: Explicitly handle conflict on user_id to avoid Duplicate Key error
-                    supabase.table("prediction_logs").upsert({
-                        "user_id": st.session_state.user.id, 
-                        "user_identifier": st.session_state.user.email,
+                    supabase.table("prediction_logs").update({
                         "usage_count": new_count
-                    }, on_conflict="user_id").execute()
+                    }).eq("user_id", st.session_state.user.id).execute()
                     
                     st.session_state.usage_left -= 1
                 except Exception as e: 

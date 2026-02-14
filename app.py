@@ -23,6 +23,11 @@ except Exception:
 # --- CONFIG & THEME ---
 st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="🏏")
 
+# --- INITIALIZE SESSION STATE ---
+if 'user' not in st.session_state: st.session_state.user = None
+if 'usage_left' not in st.session_state: st.session_state.usage_left = 0
+if 'is_pro' not in st.session_state: st.session_state.is_pro = False
+
 # Premium UI Polish (CSS Only) - PRESERVED EXACTLY
 st.markdown("""
     <style>
@@ -227,15 +232,140 @@ def get_inning_scorecard(df, innings_no):
     bowl['W'] = bowl['W'].astype(int); bowl['rc_temp'] = bowl['rc_temp'].astype(int)
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
 
+# --- AUTHENTICATION HELPERS ---
+def sync_user_data(user):
+    if supabase and user:
+        try:
+            # We use user.id (UUID from Auth) to link to logs
+            res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
+            if res.data:
+                st.session_state.is_pro = res.data[0]['is_pro']
+                st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
+            else:
+                st.session_state.is_pro = False
+                st.session_state.usage_left = 3
+        except Exception: pass
+
 # --- NAVIGATION ---
 st.sidebar.title("Cricket Intelligence")
-page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
+page = st.sidebar.radio("Navigation", ["Pro Prediction", "Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame"])
 
-# --- UPDATED CONNECTION STATUS ---
+# --- SUPABASE AUTH SIDEBAR ---
+with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
+    if not st.session_state.user:
+        email = st.text_input("Email", placeholder="email@example.com")
+        password = st.text_input("Password", type="password")
+        col_login, col_signup = st.columns(2)
+        
+        if col_login.button("Login"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.user = res.user
+                sync_user_data(res.user)
+                st.rerun()
+            except Exception as e: st.error("Invalid Credentials")
+            
+        if col_signup.button("Sign Up"):
+            try:
+                supabase.auth.sign_up({"email": email, "password": password})
+                st.success("Verification link sent! Check your inbox.")
+            except Exception as e: st.error("Signup failed.")
+    else:
+        st.write(f"Logged in: {st.session_state.user.email}")
+        if st.button("Logout"):
+            supabase.auth.sign_out()
+            st.session_state.user = None
+            st.rerun()
+
 st.sidebar.markdown(f"**Connection:** {supabase_status}")
 
 # --- PAGE LOGIC ---
-if page == "Match Center":
+if page == "Pro Prediction":
+    st.title("AI Match Predictor")
+    
+    if not st.session_state.user:
+        st.warning("Please Login or Sign Up via the sidebar to access AI Predictions.")
+    else:
+        # Dynamic Header - Updates without refresh
+        if st.session_state.is_pro:
+            st.success("💎 PRO ACCOUNT | Unlimited Simulations Enabled")
+        else:
+            st.info(f"Free Simulations Remaining: {st.session_state.usage_left}")
+
+        model, le_t, le_v, le_d = train_ml_model(matches_df)
+        
+        with st.container():
+            st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                t1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
+            with col2:
+                t2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != t1])
+            with col3:
+                v = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
+            with col4:
+                tw = st.selectbox("Toss Winner", [t1, t2])
+                
+            td = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        can_run = st.session_state.is_pro or st.session_state.usage_left > 0
+        
+        if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not can_run):
+            # 1. IMMEDIATE DB UPDATE & STATE CHANGE
+            if not st.session_state.is_pro:
+                try:
+                    current_usage = 3 - st.session_state.usage_left
+                    new_count = current_usage + 1
+                    # Update local state first for instant UI feedback
+                    st.session_state.usage_left -= 1
+                    # Upsert to DB using actual User ID
+                    supabase.table("prediction_logs").upsert({
+                        "user_id": st.session_state.user.id, 
+                        "user_identifier": st.session_state.user.email,
+                        "usage_count": new_count
+                    }).execute()
+                except Exception as e: st.error(f"Sync error: {e}")
+
+            # 2. VISUAL PROCESSING DELAY (Professional Feel)
+            with st.spinner("Processing deep-learning variables..."):
+                progress_bar = st.progress(0)
+                for percent in range(100):
+                    time.sleep(0.01) # 1 second total delay
+                    progress_bar.progress(percent + 1)
+                
+                # Feature Extraction Logic (Preserved)
+                h2h_matches = matches_df[((matches_df['team1'] == t1) & (matches_df['team2'] == t2)) | ((matches_df['team1'] == t2) & (matches_df['team2'] == t1))]
+                h2h_val = len(h2h_matches[h2h_matches['winner'] == t1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
+                v_t1_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t1)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
+                v_t2_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t2)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
+                
+                def live_form(team):
+                    rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
+                    return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
+
+                input_data = pd.DataFrame({
+                    'team1': le_t.transform([t1]), 'team2': le_t.transform([t2]),
+                    'venue': le_v.transform([v]), 'toss_winner': le_t.transform([tw]),
+                    'toss_decision': le_d.transform([td]), 'h2h': [h2h_val],
+                    'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(t1)], 'form_t2': [live_form(t2)]
+                })
+                
+                probs = model.predict_proba(input_data)[0]
+                t1_prob = round(probs[1] * 100, 1)
+                t2_prob = 100 - t1_prob
+
+            # 3. DISPLAY RESULTS (Will remain visible)
+            st.markdown("### AI Predicted Probability")
+            res1, res2 = st.columns(2)
+            res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+            res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+            st.toast("Simulation complete. Simulation count updated.")
+
+        elif not can_run:
+            st.error("Free Limit Reached. Contact admin to upgrade to PRO.")
+
+elif page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
@@ -275,103 +405,6 @@ if page == "Match Center":
         worm = mb.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
         fig_worm = px.line(worm, x='over', y='runs_total', color='innings', title="Match Worm", template="plotly_dark")
         st.plotly_chart(fig_worm, use_container_width=True)
-
-elif page == "Pro Prediction":
-    st.title("AI Match Predictor")
-    
-    with st.sidebar.expander("👤 User Account", expanded=True):
-        user_id = st.text_input("Enter Mobile/Email to Login", placeholder="03xxxxxxxxx")
-    
-    can_predict, usage_left, is_pro = False, 0, False
-    
-    if not user_id:
-        st.warning("Please enter your Identifier in the sidebar to start simulations.")
-    elif supabase:
-        try:
-            res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_identifier", user_id).execute()
-            if res.data:
-                count = res.data[0]['usage_count']
-                is_pro = res.data[0]['is_pro']
-                
-                if is_pro:
-                    can_predict = True
-                    st.success(f"PRO Account: {user_id} | Unlimited Access")
-                else:
-                    usage_left = max(0, 3 - count)
-                    if count >= 3:
-                        can_predict = False
-                        st.error("Free Limit Reached: You have used your 3 free simulations. Contact admin to upgrade to PRO.")
-                    else:
-                        can_predict = True
-                        st.info(f"Free Simulations Remaining: {usage_left}")
-            else:
-                usage_left = 3
-                can_predict = True
-                st.info(f"Free Simulations Remaining: {usage_left}")
-        except Exception as e:
-            st.error(f"Error checking status: {e}")
-
-    if can_predict:
-        model, le_t, le_v, le_d = train_ml_model(matches_df)
-        
-        with st.container():
-            st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                t1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
-            with col2:
-                t2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != t1])
-            with col3:
-                v = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
-            with col4:
-                tw = st.selectbox("Toss Winner", [t1, t2])
-                
-            td = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # Update Database - DO THIS FIRST
-                if supabase and not is_pro:
-                    try:
-                        check = supabase.table("prediction_logs").select("usage_count").eq("user_identifier", user_id).execute()
-                        if check.data:
-                            new_count = check.data[0]['usage_count'] + 1
-                            supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_identifier", user_id).execute()
-                        else:
-                            supabase.table("prediction_logs").insert({"user_identifier": user_id, "usage_count": 1}).execute()
-                    except Exception as e:
-                        st.error(f"Log error: {e}")
-
-                with st.spinner("Analyzing variables..."):
-                    time.sleep(1)
-                    # Feature Extraction Logic
-                    h2h_matches = matches_df[((matches_df['team1'] == t1) & (matches_df['team2'] == t2)) | ((matches_df['team1'] == t2) & (matches_df['team2'] == t1))]
-                    h2h_val = len(h2h_matches[h2h_matches['winner'] == t1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
-                    v_t1_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t1)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
-                    v_t2_val = len(matches_df[(matches_df['venue'] == v) & (matches_df['winner'] == t2)]) / len(matches_df[(matches_df['venue'] == v)]) if len(matches_df[matches_df['venue'] == v]) > 0 else 0.5
-                    
-                    def live_form(team):
-                        rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
-                        return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
-
-                    input_data = pd.DataFrame({
-                        'team1': le_t.transform([t1]), 'team2': le_t.transform([t2]),
-                        'venue': le_v.transform([v]), 'toss_winner': le_t.transform([tw]),
-                        'toss_decision': le_d.transform([td]), 'h2h': [h2h_val],
-                        'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(t1)], 'form_t2': [live_form(t2)]
-                    })
-                    
-                    probs = model.predict_proba(input_data)[0]
-                    t1_prob = round(probs[1] * 100, 1)
-                    t2_prob = 100 - t1_prob
-                    
-                    # DISPLAY RESULTS (Removed st.rerun so user can actually see this)
-                    st.markdown("### AI Predicted Probability")
-                    res1, res2 = st.columns(2)
-                    res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    
-                    st.warning("🔄 Please refresh the page manually to see updated simulation count.")
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

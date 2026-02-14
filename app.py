@@ -197,6 +197,7 @@ def sync_user_data(user):
             
             if res.data and len(res.data) > 0:
                 st.session_state.is_pro = res.data[0]['is_pro']
+                # Correctly track remaining usage based on what's in the DB
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
                 return True
             else:
@@ -207,7 +208,7 @@ def sync_user_data(user):
                     st.session_state.is_pro = False
                     st.session_state.usage_left = 3
                     return True
-                except Exception as e:
+                except Exception:
                     st.error("Account initializing. Please click 'Sign In' once more.")
                     return False
         except Exception as e:
@@ -292,9 +293,11 @@ if page == "Pro Prediction":
             st.markdown("</div>", unsafe_allow_html=True)
 
         if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not (st.session_state.is_pro or st.session_state.usage_left > 0)):
+            # Persistent DB update before showing results
             if not st.session_state.is_pro:
-                new_count = (3 - st.session_state.usage_left) + 1
-                supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_id", st.session_state.user.id).execute()
+                # Calculate new count: current used + 1
+                new_used_count = (3 - st.session_state.usage_left) + 1
+                supabase.table("prediction_logs").update({"usage_count": new_used_count}).eq("user_id", st.session_state.user.id).execute()
                 st.session_state.usage_left -= 1
             
             with st.spinner("Analyzing variables..."):

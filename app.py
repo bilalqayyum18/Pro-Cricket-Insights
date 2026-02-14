@@ -253,7 +253,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                     try:
                         res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
                         if res.user:
-                            st.success("Registration successful! Check email for verification.")
+                            st.success("Registration successful! Check email for verification. (Please check your spam folder)")
                             st.session_state.auth_view = "login"
                     except Exception as e: st.error(f"Signup failed: {str(e)}")
                 else: st.error("Invalid Format (03xx - 11 digits, 051xxx - 10 digits)")

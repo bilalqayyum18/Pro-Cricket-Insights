@@ -249,14 +249,18 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_identifier(identifier):
                     if supabase:
                         try:
-                            # Standard Email Login
                             res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                             
                             if res.session: 
                                 st.session_state.user = res.user
                                 st.session_state.access_token = res.session.access_token
-                                # IMPORTANT: Manually set auth header for the current client instance
                                 supabase.postgrest.auth(res.session.access_token)
+                                
+                                # Fetch Pro Status from prediction_logs (acting as profile)
+                                profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).maybe_single().execute()
+                                if profile_res.data:
+                                    st.session_state.is_pro = profile_res.data.get('is_pro', False)
+                                
                                 st.success("Logged in successfully!")
                                 st.rerun()
                             else:
@@ -288,11 +292,14 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
+        if st.session_state.is_pro:
+            st.write("⭐ **PRO ACCOUNT ACTIVE**")
         if st.button("Logout"): 
             if supabase:
                 supabase.auth.sign_out()
             st.session_state.user = None
             st.session_state.access_token = None
+            st.session_state.is_pro = False
             st.rerun()
 
 # --- PAGE LOGIC ---
@@ -351,21 +358,31 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                if st.session_state.access_token:
-                    supabase.postgrest.auth(st.session_state.access_token)
+                # 1. Update Pro status and Usage from prediction_logs
+                res = supabase.table("prediction_logs").select("is_pro, usage_count").eq("user_id", user_id).maybe_single().execute()
                 
-                res = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
                 if res.data:
-                    count = res.data[0]['usage_count']
+                    st.session_state.is_pro = res.data.get('is_pro', False)
+                    count = res.data.get('usage_count', 0)
                     usage_left = max(0, 3 - count)
                     if count >= 3: can_predict = False
+                
+                # If user is Pro, bypass restrictions
+                if st.session_state.is_pro:
+                    can_predict = True
+                    usage_left = "Unlimited"
+
             except Exception as e:
                 st.sidebar.error(f"Read Error: {e}")
 
         if not can_predict:
             st.error("Account Limit: You have reached 3 simulations today. Upgrade to PRO for unlimited access.")
         else:
-            st.info(f"Welcome! You have {usage_left} Simulations Remaining Today.")
+            if st.session_state.is_pro:
+                st.success(f"Welcome Pro! You have Unlimited Simulations.")
+            else:
+                st.info(f"Welcome! You have {usage_left} Simulations Remaining Today.")
+            
             model, le_t, le_v, le_d = train_ml_model(matches_df)
             
             with st.container():
@@ -384,15 +401,13 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # Execute RPC call
                 if supabase:
                     try:
-                        if st.session_state.access_token:
-                            supabase.postgrest.auth(st.session_state.access_token)
-                        
-                        # Increment usage via the fixed RPC
-                        supabase.rpc("increment_prediction_usage", {}).execute()
-                        usage_left -= 1 
+                        # Log usage only if not PRO
+                        if not st.session_state.is_pro:
+                            supabase.rpc("increment_prediction_usage", {}).execute()
+                            if usage_left != "Unlimited":
+                                usage_left = int(usage_left) - 1
                         
                         with st.spinner("Analyzing historical variables..."):
                             time.sleep(1)
@@ -422,7 +437,11 @@ elif page == "Pro Prediction":
                             res1, res2 = st.columns(2)
                             res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                             res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                            st.info(f"Simulations Remaining: {usage_left}")
+                            
+                            if st.session_state.is_pro:
+                                st.info("Simulations Remaining: Unlimited")
+                            else:
+                                st.info(f"Simulations Remaining: {usage_left}")
                             
                     except Exception as e: 
                         st.error(f"Database Error: {e}")

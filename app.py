@@ -10,7 +10,6 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 
 # --- SUPABASE CONNECTION ---
-# Note: Ensure st.secrets["SUPABASE_KEY"] is your 'anon' key, not 'service_role'
 supabase_status = "Disconnected"
 supabase = None
 try:
@@ -33,6 +32,7 @@ if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
+    # Validates Email OR Mobile (03xx, 11 digits) OR Landline (051xxx, 10 digits)
     if re.match(r'^03\d{9}$', identifier): return True
     if re.match(r'^051\d{7}$', identifier): return True
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
@@ -42,6 +42,7 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
+    # Strict validation for 03xx (11 digits) or 051 (10 digits)
     if re.match(r'^03\d{9}$', phone): return True
     if re.match(r'^051\d{7}$', phone): return True
     return False
@@ -237,7 +238,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
     if not st.session_state.user:
         if st.session_state.auth_view == "login":
             st.subheader("Login")
-            identifier = st.text_input("Email / Mobile")
+            identifier = st.text_input("Email / Mobile / Landline", help="Supports 03xx (11 digits) or 051 (10 digits)")
             password = st.text_input("Password", type="password")
             if st.button("Sign In", use_container_width=True):
                 if validate_identifier(identifier):
@@ -245,7 +246,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
                         if getattr(res, 'user', None): 
                             st.session_state.user = res.user
-                            # Critical fix: Attach token to both postgrest and global headers
                             token = res.session.access_token
                             supabase.postgrest.auth(token)
                             supabase.table("prediction_logs").auth(token)
@@ -254,12 +254,14 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                             st.error("Invalid Credentials")
                     except Exception as e: 
                         st.error(f"Login Failed: {str(e)}")
-                else: st.error("Check Format (03xx / 051xx)")
+                else: 
+                    st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
             e = st.text_input("Email")
-            m = st.text_input("Mobile (03xx / 051xx)")
+            # Character limit applied via max_chars
+            m = st.text_input("Mobile/Landline", max_chars=11, help="Mobile: 11 digits (03xx) | Landline: 10 digits (051xxx)")
             p = st.text_input("Password", type="password")
             if st.button("Create"):
                 if validate_email(e) and validate_phone(m):
@@ -267,6 +269,8 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                         res = supabase.auth.sign_up({"email": e, "password": p})
                         st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
                     except: st.error("Error creating account")
+                else: 
+                    st.error("Validation Failed: Check email format and phone digits (03xx = 11, 051 = 10)")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
@@ -362,7 +366,6 @@ elif page == "Pro Prediction":
             if st.button("RUN PRO SIMULATION", use_container_width=True):
                 if supabase:
                     try:
-                        # Fix: Calling parameterless RPC using internal auth context
                         supabase.rpc("increment_prediction_usage").execute()
                     except Exception as e: 
                         st.error(f"Database Error: {e}")
@@ -396,7 +399,6 @@ elif page == "Pro Prediction":
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                 
-                # Instant UI Refresh
                 st.rerun()
 
 elif page == "Season Dashboard":

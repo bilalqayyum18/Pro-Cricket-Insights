@@ -29,7 +29,7 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'usage_left' not in st.session_state: st.session_state.usage_left = 0
 if 'is_pro' not in st.session_state: st.session_state.is_pro = False
 
-# Premium UI Polish (CSS Only) - PRESERVED EXACTLY
+# Premium UI Polish (CSS Only)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -40,7 +40,6 @@ st.markdown("""
 
     .main { background-color: #0f172a; color: #f1f5f9; }
     
-    /* Premium Metric Styling */
     [data-testid="stMetric"] {
         background: rgba(30, 41, 59, 0.7) !important;
         border: 1px solid rgba(51, 65, 85, 0.5) !important;
@@ -51,7 +50,6 @@ st.markdown("""
     [data-testid="stMetricLabel"] { color: #94a3b8 !important; font-weight: 600 !important; font-size: 0.9rem !important; }
     [data-testid="stMetricValue"] { color: #38bdf8 !important; font-weight: 800 !important; }
 
-    /* Prediction Card */
     .prediction-card {
         background: #1e293b; 
         border-radius: 12px; 
@@ -63,7 +61,6 @@ st.markdown("""
     .prediction-card h4 { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; margin-bottom: 8px; }
     .prediction-card h1 { color: #38bdf8; margin: 0; font-size: 2.5rem; }
 
-    /* Content Containers */
     .premium-box {
         background: #1e293b;
         border-radius: 12px;
@@ -72,7 +69,6 @@ st.markdown("""
         margin-bottom: 20px;
     }
 
-    /* Professional Disclaimer - Global Style */
     .disclaimer-box {
         background-color: #0f172a;
         border: 1px solid #1e293b;
@@ -86,18 +82,15 @@ st.markdown("""
         line-height: 1.6;
     }
 
-    /* Fixed Footer */
     .footer {
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #0f172a; color: #475569; text-align: center;
         padding: 10px; font-size: 11px; border-top: 1px solid #1e293b; z-index: 1000;
     }
 
-    /* Sidebar Refinement */
     [data-testid="stSidebar"] { background-color: #0f172a !important; border-right: 1px solid #1e293b; }
     .stRadio > label { font-weight: 600 !important; color: #f1f5f9 !important; }
     
-    /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] {
         background-color: transparent;
@@ -106,7 +99,6 @@ st.markdown("""
     }
     .stTabs [aria-selected="true"] { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
 
-    /* Button Styling */
     .stButton>button {
         background-color: #38bdf8 !important;
         color: #0f172a !important;
@@ -124,15 +116,9 @@ st.markdown("""
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
-    # Mobile: 11 digits, starts with 03
-    if re.match(r'^03\d{9}$', identifier):
-        return True
-    # Landline: 10 digits, starts with 051
-    if re.match(r'^051\d{7}$', identifier):
-        return True
-    # Email: Standard format
-    if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier):
-        return True
+    if re.match(r'^03\d{9}$', identifier): return True
+    if re.match(r'^051\d{7}$', identifier): return True
+    if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
 # --- DATA LOADING ---
@@ -248,7 +234,7 @@ def get_inning_scorecard(df, innings_no):
 
 # --- AUTHENTICATION HELPERS ---
 def sync_user_data(user):
-    """Checks if user exists in DB; creates entry if missing."""
+    """Checks if user exists in DB; creates/updates entry safely."""
     if supabase and user:
         try:
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_id", user.id).execute()
@@ -256,13 +242,13 @@ def sync_user_data(user):
                 st.session_state.is_pro = res.data[0]['is_pro']
                 st.session_state.usage_left = max(0, 3 - res.data[0]['usage_count'])
             else:
-                # Auto-create entry if it doesn't exist (Fixes deletion issue)
-                supabase.table("prediction_logs").insert({
+                # Use UPSERT instead of INSERT to avoid duplicate key errors on race conditions
+                supabase.table("prediction_logs").upsert({
                     "user_id": user.id, 
-                    "user_identifier": user.email, 
+                    "user_identifier": user.email if user.email else str(user.id), 
                     "usage_count": 0, 
                     "is_pro": False
-                }).execute()
+                }, on_conflict="user_id").execute()
                 st.session_state.is_pro = False
                 st.session_state.usage_left = 3
         except Exception: 
@@ -313,7 +299,6 @@ if page == "Pro Prediction":
     if not st.session_state.user:
         st.warning("Please Login or Sign Up via the sidebar to access AI Predictions.")
     else:
-        # Dynamic Header
         if st.session_state.is_pro:
             st.success("💎 PRO ACCOUNT | Unlimited Simulations Enabled")
         else:
@@ -339,26 +324,23 @@ if page == "Pro Prediction":
         can_run = st.session_state.is_pro or st.session_state.usage_left > 0
         
         if st.button("RUN PRO SIMULATION", use_container_width=True, disabled=not can_run):
-            # 1. IMMEDIATE DB UPDATE
             if not st.session_state.is_pro:
                 try:
                     current_usage = 3 - st.session_state.usage_left
                     new_count = current_usage + 1
                     
-                    # Update DB first to ensure monetization
+                    # Fix: Explicitly handle conflict on user_id to avoid Duplicate Key error
                     supabase.table("prediction_logs").upsert({
                         "user_id": st.session_state.user.id, 
                         "user_identifier": st.session_state.user.email,
                         "usage_count": new_count
-                    }).execute()
+                    }, on_conflict="user_id").execute()
                     
-                    # Update local state
                     st.session_state.usage_left -= 1
                 except Exception as e: 
                     st.error(f"Sync error: {e}")
                     st.stop()
 
-            # 2. VISUAL PROCESSING
             with st.spinner("Processing deep-learning variables..."):
                 progress_bar = st.progress(0)
                 for percent in range(100):
@@ -385,7 +367,6 @@ if page == "Pro Prediction":
                 t1_prob = round(probs[1] * 100, 1)
                 t2_prob = 100 - t1_prob
 
-            # 3. DISPLAY RESULTS
             st.markdown("### AI Predicted Probability")
             res1, res2 = st.columns(2)
             res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)

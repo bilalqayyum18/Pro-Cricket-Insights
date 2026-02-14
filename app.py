@@ -9,7 +9,6 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 
 # --- SUPABASE CONNECTION ---
-# Cleaned up to show simple connection status
 supabase_status = "Disconnected"
 supabase = None
 try:
@@ -280,7 +279,6 @@ if page == "Match Center":
 elif page == "Pro Prediction":
     st.title("AI Match Predictor")
     
-    # --- USER AUTHENTICATION SECTION ---
     with st.sidebar.expander("👤 User Account", expanded=True):
         user_id = st.text_input("Enter Mobile/Email to Login", placeholder="03xxxxxxxxx")
     
@@ -290,7 +288,6 @@ elif page == "Pro Prediction":
         st.warning("Please enter your Identifier in the sidebar to start simulations.")
     elif supabase:
         try:
-            # Check user in DB
             res = supabase.table("prediction_logs").select("usage_count, is_pro").eq("user_identifier", user_id).execute()
             if res.data:
                 count = res.data[0]['usage_count']
@@ -308,7 +305,6 @@ elif page == "Pro Prediction":
                         can_predict = True
                         st.info(f"Free Simulations Remaining: {usage_left}")
             else:
-                # New User
                 usage_left = 3
                 can_predict = True
                 st.info(f"Free Simulations Remaining: {usage_left}")
@@ -334,7 +330,7 @@ elif page == "Pro Prediction":
             st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # Update Database
+                # Update Database - DO THIS FIRST
                 if supabase and not is_pro:
                     try:
                         check = supabase.table("prediction_logs").select("usage_count").eq("user_identifier", user_id).execute()
@@ -369,13 +365,13 @@ elif page == "Pro Prediction":
                     t1_prob = round(probs[1] * 100, 1)
                     t2_prob = 100 - t1_prob
                     
+                    # DISPLAY RESULTS (Removed st.rerun so user can actually see this)
                     st.markdown("### AI Predicted Probability")
                     res1, res2 = st.columns(2)
                     res1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     
-                    if not is_pro:
-                        st.rerun()
+                    st.warning("🔄 Please refresh the page manually to see updated simulation count.")
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

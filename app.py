@@ -15,7 +15,7 @@ supabase = None
 try:
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        key = st.secrets["SUPABASE_KEY"] # Ensure this is the 'anon' key in secrets
         supabase: Client = create_client(url, key)
         supabase_status = "Connected"
 except Exception as e:
@@ -242,10 +242,14 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_identifier(identifier):
                     try:
                         res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                        if res.user: 
+                        if getattr(res, 'user', None): 
                             st.session_state.user = res.user
+                            supabase.postgrest.auth(res.session.access_token)
                             st.rerun()
-                    except: st.error("Login Failed")
+                        else:
+                            st.error("Invalid Credentials")
+                    except Exception as e: 
+                        st.error(f"Login Failed: {str(e)}")
                 else: st.error("Check Format (03xx / 051xx)")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
         elif st.session_state.auth_view == "signup":
@@ -256,13 +260,14 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Create"):
                 if validate_email(e) and validate_phone(m):
                     try:
-                        supabase.auth.sign_up({"email": e, "password": p})
-                        st.success("Check Email"); st.session_state.auth_view = "login"
+                        res = supabase.auth.sign_up({"email": e, "password": p})
+                        st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
                     except: st.error("Error creating account")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
         if st.button("Logout"): 
+            supabase.auth.sign_out()
             st.session_state.user = None
             st.rerun()
 
@@ -351,17 +356,13 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # Update usage log before running simulation
                 if supabase:
                     try:
-                        check = supabase.table("prediction_logs").select("usage_count").eq("user_id", user_id).execute()
-                        if check.data:
-                            new_count = check.data[0]['usage_count'] + 1
-                            supabase.table("prediction_logs").update({"usage_count": new_count}).eq("user_id", user_id).execute()
-                        else:
-                            supabase.table("prediction_logs").insert({"user_id": user_id, "usage_count": 1}).execute()
+                        # Improved RPC call to atomically increment and return new count
+                        rpc_res = supabase.rpc("increment_prediction_usage", {"target_user_id": user_id}).execute()
+                        # Optional: could use rpc_res.data to update UI instantly
                     except Exception as e: 
-                        st.error(f"RLS/Database Error: Ensure you have added the SQL Policy in Supabase Editor. Detail: {e}")
+                        st.error(f"Database Error: Ensure the SQL Function is created in Supabase. Detail: {e}")
 
                 with st.spinner("Analyzing historical variables..."):
                     time.sleep(1)

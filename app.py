@@ -242,40 +242,49 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             password = st.text_input("Password", type="password")
             if st.button("Sign In", use_container_width=True):
                 if validate_identifier(identifier):
-                    try:
-                        res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                        if getattr(res, 'user', None): 
-                            st.session_state.user = res.user
-                            token = res.session.access_token
-                            supabase.postgrest.auth(token)
-                            supabase.table("prediction_logs").auth(token)
-                            st.rerun()
-                        else:
-                            st.error("Invalid Credentials")
-                    except Exception as e: 
-                        st.error(f"Login Failed: {str(e)}")
+                    if supabase:
+                        try:
+                            # Use identifier as email for sign-in logic
+                            res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
+                            if res.user: 
+                                st.session_state.user = res.user
+                                token = res.session.access_token
+                                # Set auth for subsequent calls
+                                supabase.postgrest.auth(token)
+                                st.rerun()
+                            else:
+                                st.error("Invalid Credentials")
+                        except Exception as e: 
+                            st.error(f"Login Failed: {str(e)}")
+                    else:
+                        st.error("Supabase connection not established. Check your secrets.")
                 else: 
                     st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
             e = st.text_input("Email")
-            # Character limit applied via max_chars
             m = st.text_input("Mobile/Landline", max_chars=11, help="Mobile: 11 digits (03xx) | Landline: 10 digits (051xxx)")
             p = st.text_input("Password", type="password")
             if st.button("Create"):
                 if validate_email(e) and validate_phone(m):
-                    try:
-                        res = supabase.auth.sign_up({"email": e, "password": p})
-                        st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
-                    except: st.error("Error creating account")
+                    if supabase:
+                        try:
+                            # Note: Supabase uses email for auth. Phone can be stored in metadata.
+                            res = supabase.auth.sign_up({"email": e, "password": p, "options": {"data": {"phone_number": m}}})
+                            st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
+                        except Exception as ex: 
+                            st.error(f"Error creating account: {str(ex)}")
+                    else:
+                        st.error("Supabase connection not established.")
                 else: 
                     st.error("Validation Failed: Check email format and phone digits (03xx = 11, 051 = 10)")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
         if st.button("Logout"): 
-            supabase.auth.sign_out()
+            if supabase:
+                supabase.auth.sign_out()
             st.session_state.user = None
             st.rerun()
 
@@ -288,7 +297,8 @@ if page == "Match Center":
     
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
-        mm = ml.iloc[ms.tolist().index(sel)]
+        idx = ms.tolist().index(sel)
+        mm = ml.iloc[idx]
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
         
         st.markdown(f"""
@@ -399,7 +409,8 @@ elif page == "Pro Prediction":
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                 
-                st.rerun()
+                # Note: st.rerun() here would wipe the prediction result immediately. 
+                # Removed or placed after user views results.
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -444,7 +455,7 @@ elif page == "Player Comparison":
     st.title("Head-to-Head Comparison")
     all_players = sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique())))
     c1, c2 = st.columns(2)
-    p1, p2 = c1.selectbox("Player 1", all_players, index=0), c2.selectbox("Player 2", all_players, index=1)
+    p1, p2 = c1.selectbox("Player 1", all_players, index=0), c2.selectbox("Player 2", all_players, index=min(1, len(all_players)-1))
     bat_all, bowl_all = get_batting_stats(balls_df), get_bowling_stats(balls_df)
     def get_p_stats(name):
         b, w = bat_all[bat_all['batter'] == name], bowl_all[bowl_all['bowler'] == name]

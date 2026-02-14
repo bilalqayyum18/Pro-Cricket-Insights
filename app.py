@@ -103,11 +103,28 @@ st.markdown("""
 def load_data():
     matches = pd.read_csv("psl_matches_meta_clean.csv")
     balls = pd.read_csv("psl_ball_by_ball_clean.csv")
+    
     matches['venue'] = matches['venue'].str.split(',').str[0]
     matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
+    
     # Ensure 'over' column exists for grouping
     if 'over' not in balls.columns:
         balls['over'] = balls['ball'].astype(int)
+    
+    # FIX: Ensure 'venue' exists in balls_df for Venue Analysis
+    if 'venue' not in balls.columns:
+        venue_map = matches.set_index('match_id')['venue'].to_dict()
+        balls['venue'] = balls['match_id'].map(venue_map)
+
+    # FIX: Ensure 'extra_runs' exists (Sum of wides, noballs, byes, legbyes if not present)
+    if 'extra_runs' not in balls.columns:
+        # Check if individual components exist, else assume 0
+        w = balls['wide'] if 'wide' in balls.columns else 0
+        nb = balls['noball'] if 'noball' in balls.columns else 0
+        b = balls['byes'] if 'byes' in balls.columns else 0
+        lb = balls['legbyes'] if 'legbyes' in balls.columns else 0
+        balls['extra_runs'] = w + nb + b + lb
+
     return matches, balls
 
 matches_df, balls_df = load_data()
@@ -181,9 +198,11 @@ def get_bowling_stats(df):
     bw = df[~df['wicket_kind'].isin(['run out', 'retired hurt', 'obstructing the field'])]
     wickets = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket': 'wickets'})
     df_c = df.copy()
-    df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + df_c['noball']
+    # Handle missing noball column if necessary
+    nb = df_c['noball'] if 'noball' in df_c.columns else 0
+    df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + nb
     runs = df_c.groupby('bowler')['rc'].sum().reset_index()
-    bls = df_c[(df_c['wide'] == 0) & (df_c['noball'] == 0)].groupby('bowler').size().reset_index(name='balls')
+    bls = df_c[(df_c['wide'] == 0) & (nb == 0)].groupby('bowler').size().reset_index(name='balls')
     bowling = wickets.merge(runs, on='bowler').merge(bls, on='bowler')
     bowling['economy'] = (bowling['rc'] / (bowling['balls'].replace(0, 1) / 6)).round(2)
     for col in ['wickets', 'rc', 'balls']:
@@ -203,9 +222,10 @@ def get_inning_scorecard(df, innings_no):
     
     bw = id_df[~id_df['wicket_kind'].isin(['run out', 'retired hurt'])]
     w = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket':'W'})
-    id_df['rc_temp'] = id_df['runs_batter'] + id_df['wide'] + id_df['noball']
+    nb = id_df['noball'] if 'noball' in id_df.columns else 0
+    id_df['rc_temp'] = id_df['runs_batter'] + id_df['wide'] + nb
     r = id_df.groupby('bowler')['rc_temp'].sum().reset_index()
-    bls = id_df[(id_df['wide']==0) & (id_df['noball']==0)].groupby('bowler').size().reset_index(name='bls')
+    bls = id_df[(id_df['wide']==0) & (nb==0)].groupby('bowler').size().reset_index(name='bls')
     bowl = w.merge(r, on='bowler').merge(bls, on='bowler')
     bowl['O'] = ((bowl['bls']//6) + (bowl['bls']%6/10)).round(1)
     bowl['Econ'] = (bowl['rc_temp']/(bowl['bls'].replace(0,1)/6)).round(1)
@@ -241,6 +261,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             if st.button("Create"):
                 if validate_email(e) and validate_phone(m):
                     try:
+                        # Since you are using mobile as email in Supabase potentially, or custom fields
                         supabase.auth.sign_up({"email": e, "password": p})
                         st.success("Check Email"); st.session_state.auth_view = "login"
                     except: st.error("Error creating account")
@@ -289,7 +310,7 @@ if page == "Match Center":
                 c1.markdown("**Batting**"); c1.dataframe(bt, use_container_width=True, hide_index=True)
                 c2.markdown("**Bowling**"); c2.dataframe(bl, use_container_width=True, hide_index=True)
 
-        # FIXED WORM CHART (No KeyError)
+        # FIXED WORM CHART
         mb_c = mb.copy()
         mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
         worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
@@ -375,7 +396,7 @@ elif page == "Pro Prediction":
                     res1, res2 = st.columns(2)
                     res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                     res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    st.rerun()
+                    # Note: st.rerun() here would prevent seeing the result, removed it from the simulated logic but kept button state
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -435,7 +456,8 @@ elif page == "Venue Analysis":
     vm = matches_df[matches_df['venue'] == v]
     st.metric("Matches Hosted", int(len(vm)))
     st.metric("Defend Wins", int(len(vm[vm['win_by'] == 'runs'])))
-    # Fixed KeyError for Average Score
+    
+    # FIX: Calculated Average Score safely using the venue column mapped in load_data
     v_balls = balls_df[balls_df['venue'] == v]
     if not v_balls.empty:
         avg_score = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()

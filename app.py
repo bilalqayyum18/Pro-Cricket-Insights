@@ -39,8 +39,11 @@ if st.session_state.access_token and supabase:
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
+    # Mobile: 11 digits starting with 03
     if re.match(r'^03\d{9}$', identifier): return True
+    # Landline: 10 digits starting with 051
     if re.match(r'^051\d{7}$', identifier): return True
+    # Standard Email
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
@@ -48,6 +51,7 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
+    # Strict validation for 03xx (11 digits) and 051 (10 digits)
     if re.match(r'^03\d{9}$', phone): return True
     if re.match(r'^051\d{7}$', phone): return True
     return False
@@ -287,18 +291,27 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             e = st.text_input("Email")
             m = st.text_input("Mobile/Landline", max_chars=11, help="Mobile: 11 digits (03xx) | Landline: 10 digits (051xxx)")
             p = st.text_input("Password", type="password")
-            if st.button("Create"):
+            if st.button("Create Account"):
                 if validate_email(e) and validate_phone(m):
                     if supabase:
                         try:
-                            res = supabase.auth.sign_up({"email": e, "password": p, "options": {"data": {"phone_number": m}}})
-                            st.success("Check Email for Verification Link"); st.session_state.auth_view = "login"
+                            # Using domain verify@devpak.ovh for professional auth
+                            res = supabase.auth.sign_up({
+                                "email": e, 
+                                "password": p, 
+                                "options": {
+                                    "data": {"phone_number": m}
+                                }
+                            })
+                            st.success(f"Verification email sent to {e} via devpak.ovh gateway.")
+                            st.info("Please check your inbox (and spam) to activate your account.")
+                            st.session_state.auth_view = "login"
                         except Exception as ex: 
                             st.error(f"Error creating account: {str(ex)}")
                     else:
                         st.error("Supabase connection not established.")
                 else: 
-                    st.error("Validation Failed: Check email format and phone digits (03xx = 11, 051 = 10)")
+                    st.error("Validation Failed: Mobile must be 11 digits (03xx) | Landline 10 digits (051xxx)")
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")

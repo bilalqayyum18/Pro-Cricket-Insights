@@ -410,7 +410,10 @@ if page == "Match Center":
         mb_c = mb.copy()
         mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
         worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-        fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', title="Match Worm", template="plotly_dark")
+        # Cleaned labels for Match Worm
+        fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
+                           title="Match Progression", template="plotly_dark",
+                           labels={'over': 'Overs Completed', 'runs_total_ball': 'Cumulative Runs', 'innings': 'Innings No.'})
         st.plotly_chart(fig_worm, use_container_width=True)
 
 elif page == "Pro Prediction":
@@ -574,7 +577,11 @@ elif page == "Fantasy Scout":
     fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
     fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
     fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-    st.plotly_chart(px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="My Dream XI", template="plotly_dark"), use_container_width=True)
+    # Cleaned labels for Fantasy Scout
+    fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', 
+                     orientation='h', title="Optimal Performance Scout", template="plotly_dark",
+                     labels={'pts': 'Performance Index', 'p_name': 'Player Name'})
+    st.plotly_chart(fig_fan, use_container_width=True)
 
 elif page == "Impact Players":
     st.title("Player Analysis & Rankings")
@@ -621,7 +628,10 @@ elif page == "Umpire Records":
     st.title("Umpire Records")
     u = st.selectbox("Select Umpire", sorted(pd.concat([matches_df['umpire1'], matches_df['umpire2']]).unique()))
     um = matches_df[(matches_df['umpire1'] == u) | (matches_df['umpire2'] == u)]
-    st.plotly_chart(px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', template="plotly_dark"), use_container_width=True)
+    # Cleaned labels for Umpire Records
+    fig_ump = px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', 
+                     template="plotly_dark", labels={'winner': 'Winning Team', 'count': 'Match Count'})
+    st.plotly_chart(fig_ump, use_container_width=True)
 
 elif page == "Hall of Fame":
     st.title("All-Time Records")
@@ -641,9 +651,3 @@ st.markdown("""
         any guarantees regarding match results.
     </div>
     """, unsafe_allow_html=True)
-
-
-
-
-
-

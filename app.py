@@ -266,10 +266,10 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     st.session_state.access_token = res.session.access_token
                                     supabase.postgrest.auth(res.session.access_token)
                                     
-                                    # Fetch Pro Status from the new profiles table
+                                    # Fetch Pro Status safely
                                     profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
                                     
-                                    if profile_res.data:
+                                    if profile_res.data and len(profile_res.data) > 0:
                                         st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
                                     else:
                                         # Lazy initialization: Create profile if missing
@@ -391,13 +391,12 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                # 1. Fetch current Pro status from profiles
-                profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).maybe_single().execute()
-                if profile_res.data:
-                    st.session_state.is_pro = profile_res.data.get('is_pro', False)
+                # 1. Fetch current Pro status safely from profiles
+                profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).execute()
+                if profile_res.data and len(profile_res.data) > 0:
+                    st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
 
                 # 2. Count attempts in the LAST 24 HOURS from prediction_attempts
-                # Using a rolling 24h window
                 time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
                 usage_res = supabase.table("prediction_attempts")\
                     .select("id", count="exact")\

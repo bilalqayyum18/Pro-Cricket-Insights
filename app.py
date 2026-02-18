@@ -413,6 +413,7 @@ elif page == "Pro Prediction":
         if not can_predict:
             st.error("Account Limit: You have reached 3 simulations today. Upgrade to PRO for unlimited access.")
         else:
+            # FIXED: Top welcome text now uses the usage_left variable so it updates dynamically
             if st.session_state.is_pro:
                 st.success(f"Welcome Pro! You have Unlimited Simulations.")
             else:
@@ -442,6 +443,7 @@ elif page == "Pro Prediction":
                         if not st.session_state.is_pro:
                             supabase.rpc("increment_prediction_usage", {}).execute()
                             if usage_left != "Unlimited":
+                                # Update local counter for immediate dynamic UI feedback
                                 usage_left = int(usage_left) - 1
                         
                         with st.spinner("Analyzing historical variables..."):
@@ -477,6 +479,9 @@ elif page == "Pro Prediction":
                                 st.info("Simulations Remaining: Unlimited")
                             else:
                                 st.info(f"Simulations Remaining: {usage_left}")
+                            
+                            # Force rerun to update the Top "Welcome" banner instantly
+                            st.rerun()
                             
                     except Exception as e: 
                         st.error(f"Database Error: {e}")

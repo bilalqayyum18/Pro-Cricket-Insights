@@ -268,7 +268,7 @@ def get_inning_scorecard(df, innings_no):
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
 
 # --- NAVIGATION ---
-st.sidebar.title("Cricket Intelligence")
+st.sidebar.title("Pakistan League Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
 
 # --- AUTH / CONNECTION IN SIDEBAR ---
@@ -417,7 +417,7 @@ elif page == "Pro Prediction":
     st.title("AI Match Predictor")
     
     if not st.session_state.user:
-        st.warning("Please Login to access AI Predictions.")
+        st.warning("Please Login to Access PRO Predictions.")
     else:
         user_id = st.session_state.user.id
         can_predict, usage_left = True, 3
@@ -454,7 +454,7 @@ elif page == "Pro Prediction":
             st.error("Account Limit: You have reached 3 simulations in the last 24 hours. Upgrade to PRO for unlimited access.")
         else:
             if st.session_state.is_pro:
-                st.success(f"Welcome Pro! You have Unlimited Simulations.")
+                st.success(f"Welcome! You have Unlimited Simulations.")
             else:
                 st.info(f"Welcome! You have {usage_left} Simulations Remaining (Resets every 24h).")
             
@@ -479,7 +479,7 @@ elif page == "Pro Prediction":
                 toss_decision = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            if st.button("RUN PRO SIMULATION", use_container_width=True):
+            if st.button("PREDICT MATCH WINNER", use_container_width=True):
                 # --- LOGGING BLOCK FIX ---
                 if supabase:
                     try:
@@ -507,7 +507,7 @@ elif page == "Pro Prediction":
                         st.stop()
 
                 # --- SIMULATION LOGIC ---
-                with st.spinner("Analyzing historical variables..."):
+                with st.spinner("Running Prediction Model: Analyzing Historical Variables..."):
                     time.sleep(1)
                     h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
                     h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
@@ -641,6 +641,7 @@ st.markdown("""
         any guarantees regarding match results.
     </div>
     """, unsafe_allow_html=True)
+
 
 
 

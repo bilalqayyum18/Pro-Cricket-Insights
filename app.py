@@ -266,9 +266,20 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     supabase.postgrest.auth(res.session.access_token)
                                     
                                     # Fetch Pro Status from prediction_logs (acting as profile)
-                                    profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).maybe_single().execute()
+                                    profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).execute()
+                                    
+                                    # Fix: Handle empty data to avoid NoneType error
                                     if profile_res.data:
-                                        st.session_state.is_pro = profile_res.data.get('is_pro', False)
+                                        st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
+                                    else:
+                                        # Lazy initialization: Create record if it doesn't exist
+                                        supabase.table("prediction_logs").insert({
+                                            "user_id": res.user.id,
+                                            "user_identifier": identifier,
+                                            "usage_count": 0,
+                                            "is_pro": False
+                                        }).execute()
+                                        st.session_state.is_pro = False
                                     
                                     st.success("Logged in successfully!")
                                     st.rerun()
@@ -295,7 +306,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_email(e) and validate_phone(m):
                     if supabase:
                         try:
-                            # Using domain verify@devpak.ovh for professional auth
+                            # Using professional auth flow
                             res = supabase.auth.sign_up({
                                 "email": e, 
                                 "password": p, 
@@ -303,8 +314,9 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     "data": {"phone_number": m}
                                 }
                             })
-                            st.success(f"Verification email sent to {e} via devpak.ovh gateway.")
-                            st.info("Please check your inbox (and spam) to activate your account.")
+                            # Professional message update
+                            st.success("Registration initiated successfully.")
+                            st.info(f"A confirmation link has been sent to **{e}**. Please verify your email to activate your account.")
                             st.session_state.auth_view = "login"
                         except Exception as ex: 
                             st.error(f"Error creating account: {str(ex)}")

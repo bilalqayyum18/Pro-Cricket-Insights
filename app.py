@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import numpy as np
 import time
 import re
+from datetime import datetime, timedelta
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
@@ -265,18 +266,16 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     st.session_state.access_token = res.session.access_token
                                     supabase.postgrest.auth(res.session.access_token)
                                     
-                                    # Fetch Pro Status from prediction_logs (acting as profile)
-                                    profile_res = supabase.table("prediction_logs").select("is_pro").eq("user_id", res.user.id).execute()
+                                    # Fetch Pro Status from the new profiles table
+                                    profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
                                     
-                                    # Fix: Handle empty data to avoid NoneType error
                                     if profile_res.data:
                                         st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
                                     else:
-                                        # Lazy initialization: Create record if it doesn't exist
-                                        supabase.table("prediction_logs").insert({
-                                            "user_id": res.user.id,
-                                            "user_identifier": identifier,
-                                            "usage_count": 0,
+                                        # Lazy initialization: Create profile if missing
+                                        supabase.table("profiles").insert({
+                                            "id": res.user.id,
+                                            "identifier": identifier,
                                             "is_pro": False
                                         }).execute()
                                         st.session_state.is_pro = False
@@ -314,7 +313,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     "data": {"phone_number": m}
                                 }
                             })
-                            # Professional message update
                             st.success("Registration initiated successfully.")
                             st.info(f"A confirmation link has been sent to **{e}**. Please verify your email to activate your account.")
                             st.session_state.auth_view = "login"
@@ -393,16 +391,26 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                # 1. Update Pro status and Usage from prediction_logs
-                res = supabase.table("prediction_logs").select("is_pro, usage_count").eq("user_id", user_id).maybe_single().execute()
+                # 1. Fetch current Pro status from profiles
+                profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).maybe_single().execute()
+                if profile_res.data:
+                    st.session_state.is_pro = profile_res.data.get('is_pro', False)
+
+                # 2. Count attempts in the LAST 24 HOURS from prediction_attempts
+                # Using a rolling 24h window
+                time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
+                usage_res = supabase.table("prediction_attempts")\
+                    .select("id", count="exact")\
+                    .eq("user_id", user_id)\
+                    .gt("created_at", time_threshold)\
+                    .execute()
                 
-                if res.data:
-                    st.session_state.is_pro = res.data.get('is_pro', False)
-                    count = res.data.get('usage_count', 0)
-                    usage_left = max(0, 3 - count)
-                    if count >= 3: can_predict = False
+                attempts_count = usage_res.count if usage_res.count is not None else 0
+                usage_left = max(0, 3 - attempts_count)
                 
-                # If user is Pro, bypass restrictions
+                if not st.session_state.is_pro and attempts_count >= 3:
+                    can_predict = False
+
                 if st.session_state.is_pro:
                     can_predict = True
                     usage_left = "Unlimited"
@@ -411,13 +419,12 @@ elif page == "Pro Prediction":
                 st.sidebar.error(f"Read Error: {e}")
 
         if not can_predict:
-            st.error("Account Limit: You have reached 3 simulations today. Upgrade to PRO for unlimited access.")
+            st.error("Account Limit: You have reached 3 simulations in the last 24 hours. Upgrade to PRO for unlimited access.")
         else:
-            # FIXED: Top welcome text now uses the usage_left variable so it updates dynamically
             if st.session_state.is_pro:
                 st.success(f"Welcome Pro! You have Unlimited Simulations.")
             else:
-                st.info(f"Welcome! You have {usage_left} Simulations Remaining Today.")
+                st.info(f"Welcome! You have {usage_left} Simulations Remaining (Resets every 24h).")
             
             model, le_t, le_v, le_d = train_ml_model(matches_df)
             
@@ -439,11 +446,13 @@ elif page == "Pro Prediction":
             if st.button("RUN PRO SIMULATION", use_container_width=True):
                 if supabase:
                     try:
-                        # Log usage only if not PRO
+                        # Log usage by inserting a new record into prediction_attempts
                         if not st.session_state.is_pro:
-                            supabase.rpc("increment_prediction_usage", {}).execute()
+                            supabase.table("prediction_attempts").insert({
+                                "user_id": user_id,
+                                "metadata": {"team1": team1, "team2": team2, "venue": venue}
+                            }).execute()
                             if usage_left != "Unlimited":
-                                # Update local counter for immediate dynamic UI feedback
                                 usage_left = int(usage_left) - 1
                         
                         with st.spinner("Analyzing historical variables..."):
@@ -480,7 +489,6 @@ elif page == "Pro Prediction":
                             else:
                                 st.info(f"Simulations Remaining: {usage_left}")
                             
-                            # Force rerun to update the Top "Welcome" banner instantly
                             st.rerun()
                             
                     except Exception as e: 

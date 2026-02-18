@@ -6,7 +6,7 @@ import numpy as np
 import time
 import re
 from datetime import datetime, timedelta
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 
@@ -18,7 +18,6 @@ try:
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"] 
-        # Create a persistent client instance
         supabase = create_client(url, key)
         supabase_status = "Connected"
 except Exception as e:
@@ -34,17 +33,13 @@ if 'usage_left' not in st.session_state: st.session_state.usage_left = 3
 if 'is_pro' not in st.session_state: st.session_state.is_pro = False
 if 'auth_view' not in st.session_state: st.session_state.auth_view = "login"
 
-# --- PERSIST AUTH CONTEXT ---
 if st.session_state.access_token and supabase:
     supabase.postgrest.auth(st.session_state.access_token)
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
-    # Mobile: 11 digits starting with 03
     if re.match(r'^03\d{9}$', identifier): return True
-    # Landline: 10 digits starting with 051
     if re.match(r'^051\d{7}$', identifier): return True
-    # Standard Email
     if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', identifier): return True
     return False
 
@@ -52,7 +47,6 @@ def validate_email(email):
     return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email))
 
 def validate_phone(phone):
-    # Strict validation for 03xx (11 digits) and 051 (10 digits)
     if re.match(r'^03\d{9}$', phone): return True
     if re.match(r'^051\d{7}$', phone): return True
     return False
@@ -115,78 +109,47 @@ st.markdown("""
 def load_data():
     matches = pd.read_csv("psl_matches_meta_clean.csv")
     balls = pd.read_csv("psl_ball_by_ball_clean.csv")
-    
     matches['venue'] = matches['venue'].str.split(',').str[0]
     matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
-    
     if 'over' not in balls.columns:
-        balls['over'] = balls['ball'].astype(int)
-    
+        balls['over'] = (balls['ball']).astype(int)
     if 'venue' not in balls.columns:
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map)
-
     if 'extra_runs' not in balls.columns:
         w = balls['wide'] if 'wide' in balls.columns else 0
         nb = balls['noball'] if 'noball' in balls.columns else 0
         b = balls['byes'] if 'byes' in balls.columns else 0
         lb = balls['legbyes'] if 'legbyes' in balls.columns else 0
         balls['extra_runs'] = w + nb + b + lb
-
     return matches, balls
 
 matches_df, balls_df = load_data()
 
-# --- ML MODEL ENGINE ---
-@st.cache_resource
-def train_ml_model(df):
-    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']].dropna().sort_values('date')
+# --- PLAYER ARCHETYPES LOGIC ---
+def get_player_archetype(name, df):
+    b_stats = df[df['batter'] == name]
+    w_stats = df[df['bowler'] == name]
     
-    def get_h2h_win_rate(t1, t2, date):
-        relevant = df[((df['date'] < date)) & (((df['team1'] == t1) & (df['team2'] == t2)) | ((df['team1'] == t2) & (df['team2'] == t1)))]
-        return len(relevant[relevant['winner'] == t1]) / len(relevant) if len(relevant) > 0 else 0.5
-
-    def get_venue_win_rate(team, venue, date):
-        relevant = df[(df['date'] < date) & (df['venue'] == venue) & ((df['team1'] == team) | (df['team2'] == team))]
-        return len(relevant[relevant['winner'] == team]) / len(relevant) if len(relevant) > 0 else 0.5
-
-    def get_recent_form(team, date):
-        relevant = df[(df['date'] < date) & ((df['team1'] == team) | (df['team2'] == team))].sort_values('date', ascending=False).head(5)
-        return len(relevant[relevant['winner'] == team]) / len(relevant) if len(relevant) > 0 else 0.5
-
-    model_df['h2h'] = model_df.apply(lambda x: get_h2h_win_rate(x['team1'], x['team2'], x['date']), axis=1)
-    model_df['v_t1'] = model_df.apply(lambda x: get_venue_win_rate(x['team1'], x['venue'], x['date']), axis=1)
-    model_df['v_t2'] = model_df.apply(lambda x: get_venue_win_rate(x['team2'], x['venue'], x['date']), axis=1)
-    model_df['form_t1'] = model_df.apply(lambda x: get_recent_form(x['team1'], x['date']), axis=1)
-    model_df['form_t2'] = model_df.apply(lambda x: get_recent_form(x['team2'], x['date']), axis=1)
-
-    le_team = LabelEncoder()
-    le_venue = LabelEncoder()
-    le_decision = LabelEncoder()
-    
-    all_teams = pd.concat([model_df['team1'], model_df['team2']]).unique()
-    le_team.fit(all_teams)
-    le_venue.fit(model_df['venue'].unique())
-    le_decision.fit(model_df['toss_decision'].unique())
-    
-    X = pd.DataFrame({
-        'team1': le_team.transform(model_df['team1']),
-        'team2': le_team.transform(model_df['team2']),
-        'venue': le_venue.transform(model_df['venue']),
-        'toss_winner': le_team.transform(model_df['toss_winner']),
-        'toss_decision': le_decision.transform(model_df['toss_decision']),
-        'h2h': model_df['h2h'],
-        'v_t1': model_df['v_t1'],
-        'v_t2': model_df['v_t2'],
-        'form_t1': model_df['form_t1'],
-        'form_t2': model_df['form_t2']
-    })
-    
-    y = (model_df['winner'] == model_df['team1']).astype(int)
-    model = LogisticRegression(max_iter=1000)
-    model.fit(X, y)
-    
-    return model, le_team, le_venue, le_decision
+    archetype = "All-Rounder"
+    if b_stats.empty and not w_stats.empty:
+        # Bowling Logic
+        death_overs = w_stats[w_stats['over'] >= 16]
+        if not death_overs.empty and (death_overs['is_wicket'].sum() > 2):
+            archetype = "Death Over Specialist"
+        else:
+            archetype = "Bowling Asset"
+    elif not b_stats.empty:
+        # Batting Logic
+        sr = (b_stats['runs_batter'].sum() / (b_stats.shape[0] - b_stats['wide'].sum()).replace(0,1)) * 100
+        pp_runs = b_stats[b_stats['over'] <= 6]['runs_batter'].sum()
+        if pp_runs > 50 and sr > 140:
+            archetype = "Powerplay Enforcer"
+        elif sr > 150:
+            archetype = "Finisher"
+        else:
+            archetype = "Anchor"
+    return archetype
 
 # --- ANALYTICS ENGINES ---
 def get_batting_stats(df):
@@ -221,11 +184,10 @@ def get_inning_scorecard(df, innings_no):
     if id_df.empty: return None, None
     b_stats = id_df.groupby('batter').agg({'runs_batter': 'sum', 'ball': 'count', 'wide': 'sum'}).reset_index()
     b_stats['B'] = (b_stats['ball'] - b_stats['wide']).astype(int)
-    b_stats['SR'] = (b_stats['runs_batter'] / (b_stats['B'].replace(0, 1)) * 100).round(1)
+    b_stats['SR'] = (b_stats['runs_batter'] / (b_stats['B'].replace(0, 1)) * 100).round(2)
     f = id_df[id_df['runs_batter'] == 4].groupby('batter').size().reset_index(name='4s')
     s = id_df[id_df['runs_batter'] == 6].groupby('batter').size().reset_index(name='6s')
     bat = b_stats.merge(f, on='batter', how='left').merge(s, on='batter', how='left').fillna(0)
-    bat['runs_batter'] = bat['runs_batter'].astype(int); bat['4s'] = bat['4s'].astype(int); bat['6s'] = bat['6s'].astype(int)
     
     bw = id_df[~id_df['wicket_kind'].isin(['run out', 'retired hurt'])]
     w = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket':'W'})
@@ -235,295 +197,175 @@ def get_inning_scorecard(df, innings_no):
     bls = id_df[(id_df['wide']==0) & (nb==0)].groupby('bowler').size().reset_index(name='bls')
     bowl = w.merge(r, on='bowler').merge(bls, on='bowler')
     bowl['O'] = ((bowl['bls']//6) + (bowl['bls']%6/10)).round(1)
-    bowl['Econ'] = (bowl['rc_temp']/(bowl['bls'].replace(0,1)/6)).round(1)
-    bowl['W'] = bowl['W'].astype(int); bowl['rc_temp'] = bowl['rc_temp'].astype(int)
+    bowl['Econ'] = (bowl['rc_temp']/(bowl['bls'].replace(0,1)/6)).round(2)
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
+
+# --- UPGRADED ML MODEL ENGINE ---
+@st.cache_resource
+def train_ml_model(df):
+    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']].dropna().copy()
+    
+    le_team = LabelEncoder()
+    le_venue = LabelEncoder()
+    le_decision = LabelEncoder()
+    
+    all_teams = pd.concat([model_df['team1'], model_df['team2']]).unique()
+    le_team.fit(all_teams)
+    le_venue.fit(model_df['venue'].unique())
+    le_decision.fit(model_df['toss_decision'].unique())
+    
+    def get_h2h(t1, t2, dt):
+        rel = df[((df['date'] < dt)) & (((df['team1'] == t1) & (df['team2'] == t2)) | ((df['team1'] == t2) & (df['team2'] == t1)))]
+        return len(rel[rel['winner'] == t1]) / len(rel) if len(rel) > 0 else 0.5
+
+    model_df['h2h'] = model_df.apply(lambda x: get_h2h(x['team1'], x['team2'], x['date']), axis=1)
+    
+    X = pd.DataFrame({
+        'team1': le_team.transform(model_df['team1']),
+        'team2': le_team.transform(model_df['team2']),
+        'venue': le_venue.transform(model_df['venue']),
+        'toss_winner': le_team.transform(model_df['toss_winner']),
+        'toss_decision': le_decision.transform(model_df['toss_decision']),
+        'h2h': model_df['h2h']
+    })
+    y = (model_df['winner'] == model_df['team1']).astype(int)
+    
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    return model, le_team, le_venue, le_decision
 
 # --- NAVIGATION ---
 st.sidebar.title("Cricket Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
 
-# --- AUTH / CONNECTION IN SIDEBAR ---
+# --- AUTH IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
         if st.session_state.auth_view == "login":
             st.subheader("Login")
-            identifier = st.text_input("Email / Mobile / Landline", help="Supports 03xx (11 digits) or 051 (10 digits)")
+            identifier = st.text_input("Email / Mobile / Landline")
             password = st.text_input("Password", type="password")
-            
-            # Form button columns
             col_login, col_pro = st.columns(2)
-            
             with col_login:
                 if st.button("Sign In", use_container_width=True):
                     if validate_identifier(identifier):
                         if supabase:
                             try:
                                 res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                                
                                 if res.session: 
                                     st.session_state.user = res.user
                                     st.session_state.access_token = res.session.access_token
-                                    supabase.postgrest.auth(res.session.access_token)
-                                    
-                                    # Fetch Pro Status safely with try-except for RLS
+                                    st.session_state.is_pro = False
                                     try:
-                                        profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
-                                        
-                                        if profile_res.data and len(profile_res.data) > 0:
-                                            st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
-                                        else:
-                                            # Lazy initialization if profile doesn't exist
-                                            supabase.table("profiles").insert({
-                                                "id": res.user.id,
-                                                "identifier": identifier,
-                                                "is_pro": False
-                                            }).execute()
-                                            st.session_state.is_pro = False
-                                    except Exception as profile_err:
-                                        # If RLS blocks the check, default to non-pro but don't crash login
-                                        st.session_state.is_pro = False
-                                        st.sidebar.warning("Note: Profile access restricted by database policies.")
-                                    
-                                    st.success("Logged in successfully!")
+                                        p_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
+                                        if p_res.data: st.session_state.is_pro = p_res.data[0].get('is_pro', False)
+                                    except: pass
                                     st.rerun()
-                                else:
-                                    st.error("Invalid Credentials")
-                            except Exception as e: 
-                                st.error(f"Login Failed: {str(e)}")
-                        else:
-                            st.error("Supabase connection not established.")
-                    else: 
-                        st.error("Invalid format. Use 11-digit Mobile (03xx) or 10-digit Landline (051xx).")
-            
-            with col_pro:
-                st.link_button("Request Pro Access", "https://forms.gle/pQSrUN1TcXdTD4nXA", use_container_width=True)
-
+                            except Exception as e: st.error(f"Login Failed: {e}")
+            with col_pro: st.link_button("Request Pro", "https://forms.gle/pQSrUN1TcXdTD4nXA")
             if st.button("Sign Up"): st.session_state.auth_view = "signup"; st.rerun()
-            
         elif st.session_state.auth_view == "signup":
             st.subheader("Register")
-            e = st.text_input("Email")
-            m = st.text_input("Mobile/Landline", max_chars=11, help="Mobile: 11 digits (03xx) | Landline: 10 digits (051xxx)")
-            p = st.text_input("Password", type="password")
+            e, m, p = st.text_input("Email"), st.text_input("Mobile/Landline"), st.text_input("Password", type="password")
             if st.button("Create Account"):
                 if validate_email(e) and validate_phone(m):
-                    if supabase:
-                        try:
-                            # Using professional auth flow
-                            res = supabase.auth.sign_up({
-                                "email": e, 
-                                "password": p, 
-                                "options": {
-                                    "data": {"phone_number": m}
-                                }
-                            })
-                            st.success("Registration initiated successfully.")
-                            st.info(f"A confirmation link has been sent to **{e}**. Please verify your email to activate your account.")
-                            st.session_state.auth_view = "login"
-                        except Exception as ex: 
-                            st.error(f"Error creating account: {str(ex)}")
-                    else:
-                        st.error("Supabase connection not established.")
-                else: 
-                    st.error("Validation Failed: Mobile must be 11 digits (03xx) | Landline 10 digits (051xxx)")
+                    try:
+                        supabase.auth.sign_up({"email": e, "password": p, "options": {"data": {"phone": m}}})
+                        st.success("Verification email sent!"); st.session_state.auth_view = "login"
+                    except Exception as ex: st.error(str(ex))
             if st.button("Back"): st.session_state.auth_view = "login"; st.rerun()
     else:
         st.write(f"Logged in as: {st.session_state.user.email}")
-        if st.session_state.is_pro:
-            st.write("⭐ **PRO ACCOUNT ACTIVE**")
         if st.button("Logout"): 
-            if supabase:
-                supabase.auth.sign_out()
-            st.session_state.user = None
-            st.session_state.access_token = None
-            st.session_state.is_pro = False
-            st.rerun()
+            st.session_state.user = None; st.rerun()
 
 # --- PAGE LOGIC ---
 if page == "Match Center":
-    st.title("Pro Scorecard & Live Analysis")
+    st.title("Pro Scorecard & Phase Impact")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
     ms = ml.apply(lambda x: f"{x['team1']} vs {x['team2']} ({x['date'].strftime('%Y-%m-%d')})", axis=1)
     
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
-        idx = ms.tolist().index(sel)
-        mm = ml.iloc[idx]
+        mm = ml.iloc[ms.tolist().index(sel)]
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
         
-        st.markdown(f"""
-        <div class="premium-box" style="border-left: 5px solid #38bdf8;">
-            <h2 style='margin:0;'>{mm['team1']} vs {mm['team2']}</h2>
-            <p style='color:#94a3b8; font-size:1.1rem; margin:5px 0;'>🏟️ {mm['venue']} | 📅 {mm['date'].strftime('%Y-%m-%d')}</p>
-            <hr style='border-color:#334155;'>
-            <p><b>Toss:</b> {mm['toss_winner']} won and chose to {mm['toss_decision']}</p>
-            <p style='font-size:1.2rem; color:#38bdf8;'><b>Result:</b> {mm['winner']} won by {mm['win_margin']} {mm['win_by']}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"<div class='premium-box' style='border-left: 5px solid #38bdf8;'><h2>{mm['team1']} vs {mm['team2']}</h2><p>{mm['venue']} | {mm['winner']} won</p></div>", unsafe_allow_html=True)
 
-        st.markdown("### Scorecard Summary")
-        sc1, sc2 = st.tabs([f"1st Innings", f"2nd Innings"])
-        
+        sc1, sc2, sc3 = st.tabs(["1st Innings", "2nd Innings", "Phase Impact"])
         with sc1:
             bt, bl = get_inning_scorecard(mb, 1)
             if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**"); c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**"); c2.dataframe(bl, use_container_width=True, hide_index=True)
+                c1, c2 = st.columns(2); c1.dataframe(bt, hide_index=True); c2.dataframe(bl, hide_index=True)
         with sc2:
             bt, bl = get_inning_scorecard(mb, 2)
             if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**"); c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**"); c2.dataframe(bl, use_container_width=True, hide_index=True)
-
-        mb_c = mb.copy()
-        mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
-        worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-        fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', title="Match Worm", template="plotly_dark")
-        st.plotly_chart(fig_worm, use_container_width=True)
+                c1, c2 = st.columns(2); c1.dataframe(bt, hide_index=True); c2.dataframe(bl, hide_index=True)
+        with sc3:
+            # Phase Impact Logic
+            mb['phase'] = pd.cut(mb['over'], bins=[0, 6, 15, 20], labels=['Powerplay', 'Middle', 'Death'])
+            phase_data = mb.groupby(['innings', 'phase'])['runs_batter'].sum().reset_index()
+            fig_phase = px.bar(phase_data, x='phase', y='runs_batter', color='innings', barmode='group', 
+                               title="Scoring by Match Phase", template="plotly_dark",
+                               labels={'runs_batter': 'Runs', 'phase': 'Match Phase'})
+            st.plotly_chart(fig_phase, use_container_width=True)
 
 elif page == "Pro Prediction":
-    st.title("AI Match Predictor")
-    
+    st.title("AI Match Predictor (RandomForest)")
     if not st.session_state.user:
         st.warning("Please Login to access AI Predictions.")
     else:
-        user_id = st.session_state.user.id
-        can_predict, usage_left = True, 3
-        
-        if supabase:
-            try:
-                # 1. Fetch current Pro status safely from profiles
-                profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).execute()
-                if profile_res.data and len(profile_res.data) > 0:
-                    st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
-
-                # 2. Count attempts in the LAST 24 HOURS from prediction_attempts
-                time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
-                usage_res = supabase.table("prediction_attempts")\
-                    .select("id", count="exact")\
-                    .eq("user_id", user_id)\
-                    .gt("created_at", time_threshold)\
-                    .execute()
-                
-                attempts_count = usage_res.count if usage_res.count is not None else 0
-                usage_left = max(0, 3 - attempts_count)
-                
-                if not st.session_state.is_pro and attempts_count >= 3:
-                    can_predict = False
-
-                if st.session_state.is_pro:
-                    can_predict = True
-                    usage_left = "Unlimited"
-
-            except Exception as e:
-                st.sidebar.error(f"Read Error: {e}")
-
-        if not can_predict:
-            st.error("Account Limit: You have reached 3 simulations in the last 24 hours. Upgrade to PRO for unlimited access.")
-        else:
-            if st.session_state.is_pro:
-                st.success(f"Welcome Pro! You have Unlimited Simulations.")
-            else:
-                st.info(f"Welcome! You have {usage_left} Simulations Remaining (Resets every 24h).")
+        model, le_t, le_v, le_d = train_ml_model(matches_df)
+        with st.container():
+            st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            t1 = c1.selectbox("Team 1", sorted(matches_df['team1'].unique()))
+            t2 = c2.selectbox("Team 2", [t for t in sorted(matches_df['team2'].unique()) if t != t1])
+            ven = c3.selectbox("Venue", sorted(matches_df['venue'].unique()))
             
-            model, le_t, le_v, le_d = train_ml_model(matches_df)
-            
-            with st.container():
-                st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    team1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
-                with col2:
-                    team2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != team1])
-                with col3:
-                    venue = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
-                with col4:
-                    toss_winner = st.selectbox("Toss Winner", [team1, team2])
-                    
-                toss_decision = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
-                st.markdown("</div>", unsafe_allow_html=True)
+            # New Inputs
+            p_col, w_col, toss_col = st.columns(3)
+            pitch = p_col.selectbox("Pitch Condition", ["Flat", "Green", "Dry/Dusty", "Balanced"])
+            weather = w_col.selectbox("Weather", ["Clear", "Overcast", "Humid"])
+            t_win = toss_col.selectbox("Toss Winner", [t1, t2])
+            t_dec = st.radio("Toss Decision", ["bat", "field"], horizontal=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            if st.button("RUN PRO SIMULATION", use_container_width=True):
-                # --- LOGGING BLOCK FIX ---
-                if supabase:
-                    try:
-                        # Log detailed attempt
-                        supabase.table("prediction_attempts").insert({
-                            "user_id": user_id,
-                            "metadata": {"team1": team1, "team2": team2, "venue": venue}
-                        }).execute()
-                        
-                        # Sync with prediction_logs for aggregate tracking
-                        # Using upsert logic to ensure prediction_logs records data
-                        supabase.table("prediction_logs").upsert({
-                            "user_id": user_id,
-                            "user_identifier": st.session_state.user.email,
-                            "is_pro": st.session_state.is_pro,
-                            "usage_count": attempts_count + 1
-                        }, on_conflict="user_id").execute()
-                        
-                        if not st.session_state.is_pro:
-                            usage_left = max(0, 3 - (attempts_count + 1))
-                            
-                    except Exception as log_error:
-                        st.error(f"Database Error: {log_error}")
-                        st.info("Check RLS policies and table permissions in Supabase.")
-                        st.stop()
-
-                # --- SIMULATION LOGIC ---
-                with st.spinner("Analyzing historical variables..."):
-                    time.sleep(1)
-                    h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
-                    h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
-                    v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
-                    v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
-                    v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
-                    v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
-
-                    def live_form(team):
-                        rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
-                        return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
-                    
-                    input_data = pd.DataFrame({
-                        'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
-                        'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
-                        'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
-                        'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
-                    })
-                    
-                    probs = model.predict_proba(input_data)[0]
-                    t1_prob = round(probs[1] * 100, 1)
-                    t2_prob = round(100 - t1_prob, 1)
-                    
-                    st.markdown("### AI Predicted Probability")
-                    res1, res2 = st.columns(2)
-                    res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                    
-                    if st.session_state.is_pro:
-                        st.info("Simulations Remaining: Unlimited")
-                    else:
-                        st.info(f"Simulations Remaining: {usage_left}")
-                    
-                    # NOTE: Removed st.rerun() from here to prevent the UI from clearing results immediately.
-                    # This allows the user to see the prediction results.
+        if st.button("RUN PRO SIMULATION"):
+            with st.spinner("Calculating variables..."):
+                time.sleep(1)
+                input_data = pd.DataFrame({
+                    'team1': le_t.transform([t1]), 'team2': le_t.transform([t2]),
+                    'venue': le_v.transform([ven]), 'toss_winner': le_t.transform([t_win]),
+                    'toss_decision': le_d.transform([t_dec]), 'h2h': [0.5]
+                })
+                probs = model.predict_proba(input_data)[0]
+                r1, r2 = st.columns(2)
+                r1.markdown(f"<div class='prediction-card'><h4>{t1}</h4><h1>{round(probs[1]*100,1)}%</h1></div>", unsafe_allow_html=True)
+                r2.markdown(f"<div class='prediction-card'><h4>{t2}</h4><h1>{round(probs[0]*100,1)}%</h1></div>", unsafe_allow_html=True)
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
     st.title(f"Tournament Summary: {season}")
-    s_matches = matches_df[matches_df['season'] == season]
-    winner = s_matches.sort_values('match_id').iloc[-1]['winner'] if not s_matches.empty else "N/A"
     s_balls = balls_df[balls_df['season'] == season]
     bat, bowl = get_batting_stats(s_balls), get_bowling_stats(s_balls)
+    
+    # MVP Calculation (Simple weighted score)
+    mvp = s_balls.groupby('batter').agg({'runs_batter': 'sum', 'is_wicket': 'sum'}).reset_index()
+    mvp['score'] = (mvp['runs_batter'] * 1) + (mvp['is_wicket'] * 25)
+    mvp = mvp.sort_values('score', ascending=False).head(10)
+
     m1, m2, m3 = st.columns(3)
-    m1.metric("Champion", winner)
-    if not bat.empty: m2.metric("Orange Cap", bat.iloc[0]['batter'], f"{int(bat.iloc[0]['runs_batter'])} R")
-    if not bowl.empty: m3.metric("Purple Cap", bowl.iloc[0]['bowler'], f"{int(bowl.iloc[0]['wickets'])} W")
-    st.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', text='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
+    if not bat.empty: m1.metric("Orange Cap", bat.iloc[0]['batter'], f"{int(bat.iloc[0]['runs_batter'])} Runs")
+    if not bowl.empty: m2.metric("Purple Cap", bowl.iloc[0]['bowler'], f"{int(bowl.iloc[0]['wickets'])} Wickets")
+    if not mvp.empty: m3.metric("Top MVP", mvp.iloc[0]['batter'], f"{int(mvp.iloc[0]['score'])} Pts")
+
+    st.subheader("Top Performers")
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark", labels={'runs_batter': 'Runs', 'batter': 'Player'}), use_container_width=True)
+    c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark", labels={'wickets': 'Wickets', 'bowler': 'Player'}), use_container_width=True)
+    st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark", labels={'score': 'Impact Score', 'batter': 'Player'}), use_container_width=True)
 
 elif page == "Fantasy Scout":
     st.title("Fantasy Team Optimizer")
@@ -533,54 +375,68 @@ elif page == "Fantasy Scout":
     fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
     fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
     fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-    st.plotly_chart(px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="My Dream XI", template="plotly_dark"), use_container_width=True)
+    top_11 = fan.sort_values('pts', ascending=False).head(11)
+
+    st.subheader("Interactive Candidate Comparison")
+    selected_players = st.multiselect("Select Players to Compare", top_11['p_name'].tolist(), default=top_11['p_name'].tolist()[:3])
+    
+    if selected_players:
+        comp_df = fan[fan['p_name'].isin(selected_players)]
+        fig = go.Figure()
+        for _, row in comp_df.iterrows():
+            fig.add_trace(go.Scatterpolar(
+                r=[row['runs_batter']/10, row['strike_rate']/10, row['wickets']*5, row['economy']*2],
+                theta=['Runs/10', 'SR/10', 'Wickets*5', 'Econ*2'],
+                fill='toself', name=row['p_name']
+            ))
+        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100])), template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
 
 elif page == "Impact Players":
-    st.title("Player Analysis & Rankings")
+    st.title("Player Analysis & Archetypes")
     p = st.selectbox("Select Player", sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique()))))
+    arch = get_player_archetype(p, balls_df)
+    st.info(f"Archetype Identified: **{arch}**")
     all_bat, all_bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
     ca, cb = st.columns(2)
     bp = all_bat[all_bat['batter'] == p]
     if not bp.empty:
         with ca:
             st.metric("Total Runs", int(bp.iloc[0]['runs_batter']))
-            st.metric("Strike Rate", bp.iloc[0]['strike_rate'])
+            st.metric("Strike Rate", round(float(bp.iloc[0]['strike_rate']), 2))
     wp = all_bowl[all_bowl['bowler'] == p]
     if not wp.empty:
         with cb:
             st.metric("Total Wickets", int(wp.iloc[0]['wickets']))
-            st.metric("Economy", wp.iloc[0]['economy'])
+            st.metric("Economy", round(float(wp.iloc[0]['economy']), 2))
 
 elif page == "Player Comparison":
     st.title("Head-to-Head Comparison")
-    all_players = sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique())))
+    all_p = sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique())))
     c1, c2 = st.columns(2)
-    p1, p2 = c1.selectbox("Player 1", all_players, index=0), c2.selectbox("Player 2", all_players, index=min(1, len(all_players)-1))
-    bat_all, bowl_all = get_batting_stats(balls_df), get_bowling_stats(balls_df)
-    def get_p_stats(name):
-        b, w = bat_all[bat_all['batter'] == name], bowl_all[bowl_all['bowler'] == name]
-        return {'Runs': int(b.iloc[0]['runs_batter']) if not b.empty else 0, 'SR': b.iloc[0]['strike_rate'] if not b.empty else 0.0,
-                'Wickets': int(w.iloc[0]['wickets']) if not w.empty else 0, 'Econ': w.iloc[0]['economy'] if not w.empty else 0.0}
-    s1, s2 = get_p_stats(p1), get_p_stats(p2)
-    st.table(pd.DataFrame({'Metric': ['Runs', 'SR', 'Wickets', 'Econ'], p1: [s1['Runs'], s1['SR'], s1['Wickets'], s1['Econ']], p2: [s2['Runs'], s2['SR'], s2['Wickets'], s2['Econ']]}))
+    p1, p2 = c1.selectbox("Player 1", all_p, index=0), c2.selectbox("Player 2", all_p, index=1)
+    b_all, w_all = get_batting_stats(balls_df), get_bowling_stats(balls_df)
+    def stats(n):
+        b, w = b_all[b_all['batter']==n], w_all[w_all['bowler']==n]
+        return [int(b.iloc[0]['runs_batter']) if not b.empty else 0, round(b.iloc[0]['strike_rate'],2) if not b.empty else 0.0,
+                int(w.iloc[0]['wickets']) if not w.empty else 0, round(w.iloc[0]['economy'],2) if not w.empty else 0.0]
+    st.table(pd.DataFrame({'Metric': ['Runs', 'SR', 'Wickets', 'Econ'], p1: stats(p1), p2: stats(p2)}))
 
 elif page == "Venue Analysis":
     st.title("Venue Intelligence")
     v = st.selectbox("Select Venue", sorted(matches_df['venue'].unique()))
     vm = matches_df[matches_df['venue'] == v]
-    st.metric("Matches Hosted", int(len(vm)))
-    st.metric("Defend Wins", int(len(vm[vm['win_by'] == 'runs'])))
-    
+    st.metric("Matches Hosted", len(vm))
     v_balls = balls_df[balls_df['venue'] == v]
     if not v_balls.empty:
-        avg_score = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()
-        st.metric("Avg 1st Innings", int(avg_score) if not np.isnan(avg_score) else 0)
+        avg = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()
+        st.metric("Avg 1st Innings", round(avg, 2))
 
 elif page == "Umpire Records":
     st.title("Umpire Records")
     u = st.selectbox("Select Umpire", sorted(pd.concat([matches_df['umpire1'], matches_df['umpire2']]).unique()))
     um = matches_df[(matches_df['umpire1'] == u) | (matches_df['umpire2'] == u)]
-    st.plotly_chart(px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', template="plotly_dark"), use_container_width=True)
+    st.plotly_chart(px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', template="plotly_dark", labels={'count':'Wins','winner':'Team'}), use_container_width=True)
 
 elif page == "Hall of Fame":
     st.title("All-Time Records")
@@ -588,16 +444,4 @@ elif page == "Hall of Fame":
     with t1: st.dataframe(get_batting_stats(balls_df).head(50), use_container_width=True, hide_index=True)
     with t2: st.dataframe(get_bowling_stats(balls_df).head(50), use_container_width=True, hide_index=True)
 
-# --- GLOBAL LEGAL DISCLAIMER ---
-st.markdown("""
-    <div class="disclaimer-box">
-        <strong>Legal Disclaimer & Terms of Use:</strong><br>
-        This platform is an <strong>independent fan-led project</strong> and is not affiliated with, endorsed by, or 
-        associated with the Pakistan Super League (PSL), the Pakistan Cricket Board (PCB), or any specific cricket 
-        franchise. All trademarks and copyrights belong to their respective owners.<br><br>
-        This tool utilizes Machine Learning (ML) to generate probabilistic outcomes based on historical data. 
-        These predictions are for <strong>informational and entertainment purposes only</strong> and do not provide 
-        any guarantees regarding match results.
-    </div>
-    """, unsafe_allow_html=True)
-
+st.markdown("""<div class='disclaimer-box'><strong>Legal Disclaimer:</strong> Independent fan portal. Predictions are probabilistic and for entertainment only. PRO CRICKET INSIGHTS © 2026</div>""", unsafe_allow_html=True)

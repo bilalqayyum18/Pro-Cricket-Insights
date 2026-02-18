@@ -451,21 +451,28 @@ elif page == "Pro Prediction":
                 # --- LOGGING BLOCK FIX ---
                 if supabase:
                     try:
-                        # Log usage by inserting a new record into prediction_attempts
-                        # Only log for non-pro to track quota
+                        # Log detailed attempt
+                        supabase.table("prediction_attempts").insert({
+                            "user_id": user_id,
+                            "metadata": {"team1": team1, "team2": team2, "venue": venue}
+                        }).execute()
+                        
+                        # Sync with prediction_logs for aggregate tracking
+                        # Using upsert logic to ensure prediction_logs records data
+                        supabase.table("prediction_logs").upsert({
+                            "user_id": user_id,
+                            "user_identifier": st.session_state.user.email,
+                            "is_pro": st.session_state.is_pro,
+                            "usage_count": attempts_count + 1
+                        }, on_conflict="user_id").execute()
+                        
                         if not st.session_state.is_pro:
-                            log_res = supabase.table("prediction_attempts").insert({
-                                "user_id": user_id,
-                                "metadata": {"team1": team1, "team2": team2, "venue": venue}
-                            }).execute()
+                            usage_left = max(0, 3 - (attempts_count + 1))
                             
-                            if usage_left != "Unlimited":
-                                usage_left = int(usage_left) - 1
                     except Exception as log_error:
-                        # Graceful error handling for RLS issues
                         st.error(f"Database Error: {log_error}")
-                        st.info("Ensure you have applied the RLS policies in Supabase SQL editor.")
-                        st.stop() # Prevents prediction from running if logging fails (since quotas rely on it)
+                        st.info("Check RLS policies and table permissions in Supabase.")
+                        st.stop()
 
                 # --- SIMULATION LOGIC ---
                 with st.spinner("Analyzing historical variables..."):
@@ -502,7 +509,8 @@ elif page == "Pro Prediction":
                     else:
                         st.info(f"Simulations Remaining: {usage_left}")
                     
-                    st.rerun()
+                    # NOTE: Removed st.rerun() from here to prevent the UI from clearing results immediately.
+                    # This allows the user to see the prediction results.
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))

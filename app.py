@@ -458,7 +458,11 @@ elif page == "Pro Prediction":
             else:
                 st.info(f"Welcome! You have {usage_left} Simulations Remaining (Resets every 24h).")
             
-            model, le_t, le_v, le_d = train_ml_model(matches_df)
+            st.info("⏳ Initializing AI model… please allow up to 10 seconds on first load.")
+
+            with st.spinner("Loading historical models and encoders…"):
+                model, le_t, le_v, le_d = train_ml_model(matches_df)
+
             
             with st.container():
                 st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
@@ -637,6 +641,7 @@ st.markdown("""
         any guarantees regarding match results.
     </div>
     """, unsafe_allow_html=True)
+
 
 
 

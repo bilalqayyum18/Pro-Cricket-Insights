@@ -6,9 +6,10 @@ import numpy as np
 import time
 import re
 from datetime import datetime, timedelta
-from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
+from xgboost import XGBClassifier
+
 
 # --- SUPABASE CONNECTION ---
 supabase_status = "Disconnected"
@@ -140,18 +141,33 @@ matches_df, balls_df = load_data()
 # --- ML MODEL ENGINE ---
 @st.cache_resource
 def train_ml_model(df):
-    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']].dropna().sort_values('date')
-    
+    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']]\
+        .dropna()\
+        .sort_values('date')
+
     def get_h2h_win_rate(t1, t2, date):
-        relevant = df[((df['date'] < date)) & (((df['team1'] == t1) & (df['team2'] == t2)) | ((df['team1'] == t2) & (df['team2'] == t1)))]
+        relevant = df[
+            (df['date'] < date) &
+            (
+                ((df['team1'] == t1) & (df['team2'] == t2)) |
+                ((df['team1'] == t2) & (df['team2'] == t1))
+            )
+        ]
         return len(relevant[relevant['winner'] == t1]) / len(relevant) if len(relevant) > 0 else 0.5
 
     def get_venue_win_rate(team, venue, date):
-        relevant = df[(df['date'] < date) & (df['venue'] == venue) & ((df['team1'] == team) | (df['team2'] == team))]
+        relevant = df[
+            (df['date'] < date) &
+            (df['venue'] == venue) &
+            ((df['team1'] == team) | (df['team2'] == team))
+        ]
         return len(relevant[relevant['winner'] == team]) / len(relevant) if len(relevant) > 0 else 0.5
 
     def get_recent_form(team, date):
-        relevant = df[(df['date'] < date) & ((df['team1'] == team) | (df['team2'] == team))].sort_values('date', ascending=False).head(5)
+        relevant = df[
+            (df['date'] < date) &
+            ((df['team1'] == team) | (df['team2'] == team))
+        ].sort_values('date', ascending=False).head(5)
         return len(relevant[relevant['winner'] == team]) / len(relevant) if len(relevant) > 0 else 0.5
 
     model_df['h2h'] = model_df.apply(lambda x: get_h2h_win_rate(x['team1'], x['team2'], x['date']), axis=1)
@@ -163,12 +179,12 @@ def train_ml_model(df):
     le_team = LabelEncoder()
     le_venue = LabelEncoder()
     le_decision = LabelEncoder()
-    
+
     all_teams = pd.concat([model_df['team1'], model_df['team2']]).unique()
     le_team.fit(all_teams)
     le_venue.fit(model_df['venue'].unique())
     le_decision.fit(model_df['toss_decision'].unique())
-    
+
     X = pd.DataFrame({
         'team1': le_team.transform(model_df['team1']),
         'team2': le_team.transform(model_df['team2']),
@@ -181,12 +197,24 @@ def train_ml_model(df):
         'form_t1': model_df['form_t1'],
         'form_t2': model_df['form_t2']
     })
-    
+
     y = (model_df['winner'] == model_df['team1']).astype(int)
-    model = LogisticRegression(max_iter=1000)
+
+    model = XGBClassifier(
+        n_estimators=300,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42
+    )
+
     model.fit(X, y)
-    
+
     return model, le_team, le_venue, le_decision
+
 
 # --- ANALYTICS ENGINES ---
 def get_batting_stats(df):
@@ -609,4 +637,5 @@ st.markdown("""
         any guarantees regarding match results.
     </div>
     """, unsafe_allow_html=True)
+
 

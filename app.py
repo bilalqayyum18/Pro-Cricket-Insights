@@ -448,55 +448,61 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("RUN PRO SIMULATION", use_container_width=True):
+                # --- LOGGING BLOCK FIX ---
                 if supabase:
                     try:
                         # Log usage by inserting a new record into prediction_attempts
+                        # Only log for non-pro to track quota
                         if not st.session_state.is_pro:
-                            supabase.table("prediction_attempts").insert({
+                            log_res = supabase.table("prediction_attempts").insert({
                                 "user_id": user_id,
                                 "metadata": {"team1": team1, "team2": team2, "venue": venue}
                             }).execute()
+                            
                             if usage_left != "Unlimited":
                                 usage_left = int(usage_left) - 1
-                        
-                        with st.spinner("Analyzing historical variables..."):
-                            time.sleep(1)
-                            h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
-                            h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
-                            v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
-                            v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
-                            v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
-                            v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
+                    except Exception as log_error:
+                        # Graceful error handling for RLS issues
+                        st.error(f"Database Error: {log_error}")
+                        st.info("Ensure you have applied the RLS policies in Supabase SQL editor.")
+                        st.stop() # Prevents prediction from running if logging fails (since quotas rely on it)
 
-                            def live_form(team):
-                                rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
-                                return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
-                            
-                            input_data = pd.DataFrame({
-                                'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
-                                'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
-                                'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
-                                'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
-                            })
-                            
-                            probs = model.predict_proba(input_data)[0]
-                            t1_prob = round(probs[1] * 100, 1)
-                            t2_prob = round(100 - t1_prob, 1)
-                            
-                            st.markdown("### AI Predicted Probability")
-                            res1, res2 = st.columns(2)
-                            res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                            res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
-                            
-                            if st.session_state.is_pro:
-                                st.info("Simulations Remaining: Unlimited")
-                            else:
-                                st.info(f"Simulations Remaining: {usage_left}")
-                            
-                            st.rerun()
-                            
-                    except Exception as e: 
-                        st.error(f"Database Error: {e}")
+                # --- SIMULATION LOGIC ---
+                with st.spinner("Analyzing historical variables..."):
+                    time.sleep(1)
+                    h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
+                    h2h_val = len(h2h_matches[h2h_matches['winner'] == team1]) / len(h2h_matches) if len(h2h_matches) > 0 else 0.5
+                    v_t1_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team1) | (matches_df['team2'] == team1))]
+                    v_t1_val = len(v_t1_m[v_t1_m['winner'] == team1]) / len(v_t1_m) if len(v_t1_m) > 0 else 0.5
+                    v_t2_m = matches_df[(matches_df['venue'] == venue) & ((matches_df['team1'] == team2) | (matches_df['team2'] == team2))]
+                    v_t2_val = len(v_t2_m[v_t2_m['winner'] == team2]) / len(v_t2_m) if len(v_t2_m) > 0 else 0.5
+
+                    def live_form(team):
+                        rel = matches_df[(matches_df['team1'] == team) | (matches_df['team2'] == team)].sort_values('date', ascending=False).head(5)
+                        return len(rel[rel['winner'] == team]) / len(rel) if len(rel) > 0 else 0.5
+                    
+                    input_data = pd.DataFrame({
+                        'team1': le_t.transform([team1]), 'team2': le_t.transform([team2]),
+                        'venue': le_v.transform([venue]), 'toss_winner': le_t.transform([toss_winner]),
+                        'toss_decision': le_d.transform([toss_decision]), 'h2h': [h2h_val],
+                        'v_t1': [v_t1_val], 'v_t2': [v_t2_val], 'form_t1': [live_form(team1)], 'form_t2': [live_form(team2)]
+                    })
+                    
+                    probs = model.predict_proba(input_data)[0]
+                    t1_prob = round(probs[1] * 100, 1)
+                    t2_prob = round(100 - t1_prob, 1)
+                    
+                    st.markdown("### AI Predicted Probability")
+                    res1, res2 = st.columns(2)
+                    res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                    res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                    
+                    if st.session_state.is_pro:
+                        st.info("Simulations Remaining: Unlimited")
+                    else:
+                        st.info(f"Simulations Remaining: {usage_left}")
+                    
+                    st.rerun()
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -583,6 +589,6 @@ st.markdown("""
         franchise. All trademarks and copyrights belong to their respective owners.<br><br>
         This tool utilizes Machine Learning (ML) to generate probabilistic outcomes based on historical data. 
         These predictions are for <strong>informational and entertainment purposes only</strong> and do not provide 
-        guaranteed results. <strong>The use of this tool for illegal gambling or match manipulation is strictly prohibited.</strong>
+        any guarantees regarding match results.
     </div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)

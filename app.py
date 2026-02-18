@@ -266,19 +266,24 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     st.session_state.access_token = res.session.access_token
                                     supabase.postgrest.auth(res.session.access_token)
                                     
-                                    # Fetch Pro Status safely
-                                    profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
-                                    
-                                    if profile_res.data and len(profile_res.data) > 0:
-                                        st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
-                                    else:
-                                        # Lazy initialization: Create profile if missing
-                                        supabase.table("profiles").insert({
-                                            "id": res.user.id,
-                                            "identifier": identifier,
-                                            "is_pro": False
-                                        }).execute()
+                                    # Fetch Pro Status safely with try-except for RLS
+                                    try:
+                                        profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
+                                        
+                                        if profile_res.data and len(profile_res.data) > 0:
+                                            st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
+                                        else:
+                                            # Lazy initialization if profile doesn't exist
+                                            supabase.table("profiles").insert({
+                                                "id": res.user.id,
+                                                "identifier": identifier,
+                                                "is_pro": False
+                                            }).execute()
+                                            st.session_state.is_pro = False
+                                    except Exception as profile_err:
+                                        # If RLS blocks the check, default to non-pro but don't crash login
                                         st.session_state.is_pro = False
+                                        st.sidebar.warning("Note: Profile access restricted by database policies.")
                                     
                                     st.success("Logged in successfully!")
                                     st.rerun()

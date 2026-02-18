@@ -410,10 +410,10 @@ if page == "Match Center":
         mb_c = mb.copy()
         mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
         worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-        # Cleaned labels for Match Worm
+        # Change: Standardized labels and removed unprofessional data labels
         fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
                            title="Match Progression", template="plotly_dark",
-                           labels={'over': 'Overs Completed', 'runs_total_ball': 'Cumulative Runs', 'innings': 'Innings No.'})
+                           labels={"over": "Overs", "runs_total_ball": "Runs", "innings": "Innings"})
         st.plotly_chart(fig_worm, use_container_width=True)
 
 elif page == "Pro Prediction":
@@ -531,8 +531,9 @@ elif page == "Pro Prediction":
                     })
                     
                     probs = model.predict_proba(input_data)[0]
-                    t1_prob = round(probs[1] * 100, 1)
-                    t2_prob = round(100 - t1_prob, 1)
+                    # Change: Rounded to 2 decimals as requested
+                    t1_prob = f"{probs[1] * 100:.2f}"
+                    t2_prob = f"{(1 - probs[1]) * 100:.2f}"
                     
                     st.markdown("### AI Predicted Probability")
                     res1, res2 = st.columns(2)
@@ -577,10 +578,10 @@ elif page == "Fantasy Scout":
     fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
     fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
     fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-    # Cleaned labels for Fantasy Scout
+    # Change: Removed unprofessional data labels and standardized axis titles
     fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', 
-                     orientation='h', title="Optimal Performance Scout", template="plotly_dark",
-                     labels={'pts': 'Performance Index', 'p_name': 'Player Name'})
+                     orientation='h', title="Fantasy Impact Ranking", template="plotly_dark",
+                     labels={"pts": "Performance Points", "p_name": "Player"})
     st.plotly_chart(fig_fan, use_container_width=True)
 
 elif page == "Impact Players":
@@ -607,10 +608,17 @@ elif page == "Player Comparison":
     bat_all, bowl_all = get_batting_stats(balls_df), get_bowling_stats(balls_df)
     def get_p_stats(name):
         b, w = bat_all[bat_all['batter'] == name], bowl_all[bowl_all['bowler'] == name]
-        return {'Runs': int(b.iloc[0]['runs_batter']) if not b.empty else 0, 'SR': b.iloc[0]['strike_rate'] if not b.empty else 0.0,
-                'Wickets': int(w.iloc[0]['wickets']) if not w.empty else 0, 'Econ': w.iloc[0]['economy'] if not w.empty else 0.0}
+        # Change: Reduced SR and Econ to 2 decimal points
+        return {'Runs': int(b.iloc[0]['runs_batter']) if not b.empty else 0, 
+                'SR': round(float(b.iloc[0]['strike_rate']), 2) if not b.empty else 0.00,
+                'Wickets': int(w.iloc[0]['wickets']) if not w.empty else 0, 
+                'Econ': round(float(w.iloc[0]['economy']), 2) if not w.empty else 0.00}
     s1, s2 = get_p_stats(p1), get_p_stats(p2)
-    st.table(pd.DataFrame({'Metric': ['Runs', 'SR', 'Wickets', 'Econ'], p1: [s1['Runs'], s1['SR'], s1['Wickets'], s1['Econ']], p2: [s2['Runs'], s2['SR'], s2['Wickets'], s2['Econ']]}))
+    st.table(pd.DataFrame({
+        'Metric': ['Runs', 'SR', 'Wickets', 'Econ'], 
+        p1: [s1['Runs'], f"{s1['SR']:.2f}", s1['Wickets'], f"{s1['Econ']:.2f}"], 
+        p2: [s2['Runs'], f"{s2['SR']:.2f}", s2['Wickets'], f"{s2['Econ']:.2f}"]
+    }))
 
 elif page == "Venue Analysis":
     st.title("Venue Intelligence")
@@ -628,9 +636,9 @@ elif page == "Umpire Records":
     st.title("Umpire Records")
     u = st.selectbox("Select Umpire", sorted(pd.concat([matches_df['umpire1'], matches_df['umpire2']]).unique()))
     um = matches_df[(matches_df['umpire1'] == u) | (matches_df['umpire2'] == u)]
-    # Cleaned labels for Umpire Records
+    # Change: Removed unprofessional data labels and standardized titles
     fig_ump = px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', 
-                     template="plotly_dark", labels={'winner': 'Winning Team', 'count': 'Match Count'})
+                     template="plotly_dark", labels={"winner": "Winner Team", "count": "Match Count"})
     st.plotly_chart(fig_ump, use_container_width=True)
 
 elif page == "Hall of Fame":

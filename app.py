@@ -26,14 +26,18 @@ def extract_data(resp):
 def normalize_text_series(series):
     return series.fillna("").astype(str).str.strip()
 
-def get_supabase_client(session=None, access_token=None):
+def get_supabase_client(session=None):
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
-        client = create_client(url, key)
-        if access_token:
-            client.postgrest.auth(access_token)
-        return client
+        
+        # If we have a session, we need to pass the access token to avoid JWT expiry errors
+        if session and hasattr(session, 'access_token'):
+            client = create_client(url, key)
+            client.postgrest.auth(session.access_token)
+            return client
+        
+        return create_client(url, key)
     return None
 
 # --- SUPABASE CONNECTION ---
@@ -70,6 +74,10 @@ if 'auth_view' not in st.session_state:
 # --- PERSIST AUTH CONTEXT ---
 if st.session_state.access_token and supabase:
     supabase.postgrest.auth(st.session_state.access_token)
+# Around line 140, update this:
+if st.session_state.user:
+    # Always refresh the client with the current session token
+    supabase = get_supabase_client(st.session_state.auth_session)
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
@@ -870,6 +878,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

@@ -198,7 +198,7 @@ def load_data():
     except Exception as e:
         st.error(f"Supabase fetch failed: {e}")
         st.stop()
-
+matches_df, balls_df = load_data()
 
 # --- ML MODEL ENGINE (RESTORED COMPLETELY) ---
 @st.cache_resource
@@ -680,5 +680,6 @@ st.markdown("""
         Predictions are probabilistic and for entertainment only.
     </div>
     """, unsafe_allow_html=True)
+
 
 

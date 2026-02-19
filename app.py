@@ -208,7 +208,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DATA LOADING (MIGRATED TO SUPABASE) ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)
 def load_data():
     if supabase_status != "Connected":
         st.error(f"Supabase Connection Failed: {supabase_status}")
@@ -240,7 +240,7 @@ def load_data():
         
         while True:
             response = client.table("ball_by_ball") \
-                .select("*") \
+                .select("match_id, innings, batter, bowler, runs_batter, wide, is_wicket, season") \
                 .range(start, start + batch_size - 1) \
                 .execute()
             
@@ -799,3 +799,4 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+

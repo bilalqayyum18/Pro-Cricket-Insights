@@ -182,25 +182,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DATA LOADING (MIGRATED TO SUPABASE) ---
-# --- HELPER FOR TEXT NORMALIZATION ---
-def normalize_text_series(series):
-    """Helper to safely normalize text columns for consistency"""
-    return series.astype(str).str.lower().str.strip().replace({'nan': '', 'none': ''})
-
-# --- DATA LOADING (MIGRATED TO SUPABASE) ---
-# --- HELPER FOR TEXT NORMALIZATION ---
-def normalize_text_series(series):
-    """Helper to safely normalize text columns for consistency"""
-    return series.astype(str).str.lower().str.strip().replace({'nan': '', 'none': ''})
-
-# --- DATA LOADING (MIGRATED TO SUPABASE) ---
 @st.cache_data(ttl=3600)
 def load_data():
     if supabase_status != "Connected":
         st.error(f"Supabase Connection Failed: {supabase_status}")
         st.stop()
     
-    if supabase is None:
+    client = get_supabase_client(session=None, access_token=st.session_state.get("access_token"))
+    if client is None:
         st.error("Supabase client not available")
         st.stop()
         
@@ -208,10 +197,10 @@ def load_data():
         # ----------------------------
         # FETCH MATCHES (defensive)
         # ----------------------------
-        matches_res = supabase.table("matches").select("*").execute()
-        # Access .data attribute directly from APIResponse
-        matches_data = matches_res.data if matches_res else []
-        matches = pd.DataFrame(matches_data)
+        matches_res = client.table("matches").select("*").execute()
+        # support both dict-like and object responses
+        matches_data = getattr(matches_res, "data", matches_res.get("data", None)) if matches_res else None
+        matches = pd.DataFrame(matches_data if matches_data else [])
         
         if matches.empty:
             st.error("Matches table is empty.")
@@ -224,14 +213,11 @@ def load_data():
         batch_size = 10000
         start = 0
         while True:
-            response = supabase.table("ball_by_ball") \
+            response = client.table("ball_by_ball") \
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
-            
-            # Access .data attribute directly from APIResponse
-            batch = response.data if response else []
-            
+            batch = getattr(response, "data", response.get("data", [])) if response else []
             if not batch:
                 break
             all_balls.extend(batch)
@@ -239,7 +225,7 @@ def load_data():
                 break
             start += batch_size
             
-        balls = pd.DataFrame(all_balls)
+        balls = pd.DataFrame(all_balls if all_balls else [])
         
         if balls.empty:
             st.error("Ball_by_ball table is empty.")
@@ -777,7 +763,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
-
 
 
 

@@ -302,7 +302,11 @@ def load_data():
         balls['match_id'] = balls['match_id'].astype('Int64')
         
         if 'date' in matches.columns:
-            matches['date'] = pd.to_datetime(matches['date'], errors='coerce').dt.date
+            # Convert to datetime and then to date objects
+            matches['date'] = pd.to_datetime(matches['date'], errors='coerce')
+            # Option: fill missing dates with a safe placeholder before converting to date
+            # matches['date'] = matches['date'].fillna(pd.Timestamp('1970-01-01'))
+            matches['date'] = matches['date'].dt.date
 
         # --- DATA SANITY CHECKS ---
         missing_match_ids = matches['match_id'].isna().sum()
@@ -550,10 +554,13 @@ if page == "Match Center":
         idx = ms.tolist().index(sel)
         mm = ml.iloc[idx]
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
+       # Create a safe date string for the display
+        display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
+        
         st.markdown(f"""
         <div class="premium-box" style="border-left: 5px solid #38bdf8;">
             <h2 style='margin:0;'>{mm['team1']} vs {mm['team2']}</h2>
-            <p style='color:#94a3b8; font-size:1.1rem; margin:5px 0;'>🏟️ {mm['venue']} | 📅 {mm['date'].strftime('%Y-%m-%d')}</p>
+            <p style='color:#94a3b8; font-size:1.1rem; margin:5px 0;'>🏟️ {mm['venue']} | 📅 {display_date}</p>
             <hr style='border-color:#334155;'>
             <p><b>Toss:</b> {mm['toss_winner']} won and chose to {mm['toss_decision']}</p>
             <p style='font-size:1.2rem; color:#38bdf8;'><b>Result:</b> {mm['winner']} won by {mm['win_margin']} {mm['win_by']}</p>
@@ -805,5 +812,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 

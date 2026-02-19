@@ -122,44 +122,79 @@ def load_data():
         st.stop()
 
     try:
-        # Fetch data directly from Supabase tables
-        matches_res = supabase.table("matches").select("*").execute()
+        # --- FETCH MATCHES (NO LIMIT) ---
+        matches_res = supabase.table("matches") \
+            .select("*") \
+            .range(0, 1000000) \
+            .execute()
+
         matches = pd.DataFrame(matches_res.data)
-        
-        balls_res = supabase.table("ball_by_ball").select("*").execute()
+
+        # --- FETCH BALL BY BALL (NO LIMIT) ---
+        balls_res = supabase.table("ball_by_ball") \
+            .select("*") \
+            .range(0, 2000000) \
+            .execute()
+
         balls = pd.DataFrame(balls_res.data)
-        
+
         if matches.empty or balls.empty:
             st.error("Data fetched but tables appear empty in Supabase.")
             st.stop()
 
-        # Data Pre-processing (Updated to Match Provided Schema)
-        matches['date'] = pd.to_datetime(matches['date'])
+        # ----------------------------
+        # MATCHES PREPROCESSING
+        # ----------------------------
+        matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce')
+        matches['season'] = pd.to_numeric(matches['season'], errors='coerce')
+        matches['date'] = pd.to_datetime(matches['date'], errors='coerce')
+
+        matches['venue'] = matches['venue'].astype(str)
         matches['venue'] = matches['venue'].str.split(',').str[0]
-        
-        # Schema uses 'over' and 'ball' columns already. No mapping needed unless missing.
-        if 'venue' not in balls.columns:
-            venue_map = matches.set_index('match_id')['venue'].to_dict()
-            balls['venue'] = balls['match_id'].map(venue_map)
 
-        # Mapping schema names: runs_extras, wide, noball, bye, legbye
-        if 'extra_runs' not in balls.columns:
-            # Schema uses runs_extras directly, but we ensure wide/noball logic for balls faced
-            balls['extra_runs'] = pd.to_numeric(balls['runs_extras'], errors='coerce').fillna(0)
+        # ----------------------------
+        # BALLS PREPROCESSING
+        # ----------------------------
+        balls['match_id'] = pd.to_numeric(balls['match_id'], errors='coerce')
+        balls['season'] = pd.to_numeric(balls['season'], errors='coerce')
+        balls['innings'] = pd.to_numeric(balls['innings'], errors='coerce')
+        balls['over'] = pd.to_numeric(balls['over'], errors='coerce')
+        balls['ball'] = pd.to_numeric(balls['ball'], errors='coerce')
 
-        # Ensure numeric types for all analytical columns
-        numeric_cols = ['runs_batter', 'runs_total', 'wide', 'noball', 'bye', 'legbye', 'is_wicket']
+        numeric_cols = [
+            'runs_batter', 'runs_extras', 'runs_total',
+            'wide', 'noball', 'bye', 'legbye',
+            'is_wicket'
+        ]
+
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
+
+        # ----------------------------
+        # FORCE VENUE MAP INTO BALLS
+        # ----------------------------
+        venue_map = matches.set_index('match_id')['venue'].to_dict()
+        balls['venue'] = balls['match_id'].map(venue_map)
+
+        # ----------------------------
+        # ENSURE STRING COLUMNS SAFE
+        # ----------------------------
+        string_cols = [
+            'batter', 'bowler', 'batting_team',
+            'bowling_team', 'wicket_kind',
+            'player_out'
+        ]
+
+        for col in string_cols:
+            if col in balls.columns:
+                balls[col] = balls[col].astype(str)
 
         return matches, balls
 
     except Exception as e:
         st.error(f"Failed to fetch data: {str(e)}")
         st.stop()
-
-matches_df, balls_df = load_data()
 
 # --- ML MODEL ENGINE (RESTORED COMPLETELY) ---
 @st.cache_resource

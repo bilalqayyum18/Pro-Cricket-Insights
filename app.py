@@ -220,9 +220,7 @@ def load_data():
         st.stop()
         
     try:
-        # ----------------------------
         # FETCH MATCHES
-        # ----------------------------
         matches_res = client.table("matches").select("*").execute()
         matches_data = extract_data(matches_res)
         matches = pd.DataFrame(matches_data if matches_data else [])
@@ -231,9 +229,7 @@ def load_data():
             st.error("Matches table is empty.")
             st.stop()
             
-        # ----------------------------
-        # FETCH BALL BY BALL IN BATCHES
-        # ----------------------------
+        # FETCH BALL BY BALL
         all_balls = []
         batch_size = 10000
         start = 0
@@ -242,10 +238,7 @@ def load_data():
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
-            
-            # Use the helper instead of direct .get()
             batch = extract_data(response)
-            
             if not batch:
                 break
             all_balls.extend(batch)
@@ -254,50 +247,44 @@ def load_data():
             start += batch_size
             
         balls = pd.DataFrame(all_balls if all_balls else [])
-        
         if balls.empty:
             st.error("Ball_by_ball table is empty.")
             st.stop()
-            
 
+        # STANDARDIZATION
         for df in [matches, balls]:
             df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').astype('Int64')
             df['season'] = pd.to_numeric(df.get('season'), errors='coerce').astype('Int64')
 
-        # 2. Handle Dates (Keep as datetime64 for ML and sorting consistency)
         matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
-        
-        # 3. Standardize Venue names (Match Center uses this for filtering)
         matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
-        # 4. Standardize Numeric Ball Data
         numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
-        # 5. Map Venue into Balls (Crucial for Venue Analysis Page)
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
-        # 6. Normalize Text Fields (Fixes Fantasy Scout Player Names)
         text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
             if c in balls.columns:
                 balls[c] = normalize_text_series(balls[c])
                 if c == "wicket_kind":
-                    # Lowercase and strip for bowling stats logic
                     balls[c] = balls[c].replace({"": None})
                     balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
 
-        # --- DATA SANITY CHECKS ---
         unmapped_v = balls[balls['venue'] == "Unknown Venue"].shape[0]
         if unmapped_v > 0:
             st.sidebar.info(f"ℹ️ {unmapped_v} balls are missing match details.")
 
         return matches, balls
+    except Exception as e:
+        st.error(f"Data process failed: {e}")
+        st.stop()
 
-# Load data
+# Initialize data
 matches_df, balls_df = load_data()
 
 # --- ML MODEL ENGINE ---
@@ -800,6 +787,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

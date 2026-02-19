@@ -868,7 +868,7 @@ elif page == "Fantasy Scout":
         fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
         fan['p_name'] = fan['batter'].where((fan['batter'] != 0) & (fan['batter'] != ""), fan['bowler'])
         fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-        fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", template="plotly_dark")
+        fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", labels={"p_name": "Player Name"}, template="plotly_dark")
         st.plotly_chart(fig_fan, use_container_width=True)
 
 elif page == "Impact Players":
@@ -968,6 +968,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

@@ -457,15 +457,14 @@ st.sidebar.title("Pakistan League Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
 # Place this around line 315, after the 'Navigation' radio button
 st.divider()
-search_query = st.text_input("🔍 Quick Player Lookup")
-if search_query:
-    found_players = [p for p in all_players if search_query.lower() in p.lower()]
-    if found_players:
-        selected_from_search = st.selectbox("Matches found:", found_players)
-        if st.button("Go to Profile", use_container_width=True):
-            st.session_state.selected_player_override = selected_from_search
-            # This helps the app switch to the Impact Players page automatically
-            # st.query_params['page'] = "Impact Players" # Optional for URL sync
+    search_query = st.sidebar.text_input("🔍 Quick Player Lookup")
+    if search_query:
+        found_players = [p for p in all_players if search_query.lower() in p.lower()]
+        if found_players:
+            selected_from_search = st.sidebar.selectbox("Matches found:", found_players)
+            if st.sidebar.button("Go to Profile", use_container_width=True):
+                st.session_state.selected_player_override = selected_from_search
+            
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
@@ -684,11 +683,20 @@ elif page == "Pro Prediction":
                 if st.button("PREDICT MATCH WINNER", use_container_width=True):
                     if supabase:
                         try:
-                            # 1. Log the individual attempt
+                            # 1. Log attempt
                             supabase.table("prediction_attempts").insert({
                                 "user_id": user_id,
                                 "metadata": {"team1": team1, "team2": team2, "venue": venue}
                             }).execute()
+
+                            # 2. Increment Log summary via RPC
+                            supabase.rpc('increment_prediction_log', {
+                                'target_user_id': user_id,
+                                'target_identifier': st.session_state.user.email,
+                                'target_is_pro': st.session_state.is_pro
+                            }).execute()
+                        except Exception as e:
+                            st.error(f"Sync Error: {e}")
 
                             # 2. Update the summary log using RPC
                             # Keys MUST match the SQL parameter names exactly
@@ -801,7 +809,17 @@ elif page == "Fantasy Scout":
         st.plotly_chart(fig_fan, use_container_width=True)
 
 elif page == "Impact Players":
-    st.title("Player Analysis & Rankings")
+    st.title("Impact Players")
+    
+    # Check if a player was sent here from the sidebar search
+    default_player_index = 0
+    if 'selected_player_override' in st.session_state:
+        try:
+            default_player_index = all_players.index(st.session_state.selected_player_override)
+            # Clear it so it doesn't force this player every time you visit the page
+            del st.session_state.selected_player_override
+        except ValueError:
+            default_player_index = 0
     p = st.selectbox("Select Player", sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique()))))
     all_bat, all_bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
     ca, cb = st.columns(2)
@@ -874,6 +892,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

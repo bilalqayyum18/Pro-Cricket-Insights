@@ -469,32 +469,6 @@ nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Play
 # Initialize page_nav state if it doesn't exist
 if "page_nav" not in st.session_state:
     st.session_state.page_nav = "Season Dashboard"
-
-# Determine the index based on session state (this is what makes it switch)
-try:
-    default_nav_index = nav_options.index(st.session_state.page_nav)
-except ValueError:
-    default_nav_index = 0
-
-# Use the index and a key to keep the radio in sync
-page = st.sidebar.radio("Navigation", nav_options, index=default_nav_index, key="main_nav")
-
-# Update the session state immediately when a user clicks manually
-st.session_state.page_nav = page
-
-st.sidebar.divider()
-search_query = st.sidebar.text_input("🔍 Quick Player Lookup")
-if search_query:
-    found_players = [p for p in all_players if search_query.lower() in p.lower()]
-    if found_players:
-        selected_from_search = st.sidebar.selectbox("Matches found:", found_players)
-        if st.sidebar.button("Go to Profile", use_container_width=True):
-            # 1. Set the player override
-            st.session_state.selected_player_override = selected_from_search
-            # 2. Change the navigation state to the target page
-            st.session_state.page_nav = "Impact Players"
-            # 3. Rerun to force the radio button to move
-            st.rerun()
             
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
@@ -947,3 +921,4 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+

@@ -678,7 +678,7 @@ if page == "Match Center":
                 fig_rr = px.bar(rr_df, x='over', y='over_runs', color='Team', 
                     barmode='group', title="Runs Per Over",
                     template="plotly_dark", 
-                    color_discrete_sequence=['#38bdf8', '#818cf8'])
+                    color_discrete_sequence=['#00d4ff', '#ff8c00'])
                 st.plotly_chart(fig_rr, use_container_width=True)
 
 elif page == "Pro Prediction":
@@ -964,5 +964,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 

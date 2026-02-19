@@ -259,70 +259,43 @@ def load_data():
             st.error("Ball_by_ball table is empty.")
             st.stop()
             
-        # ----------------------------
-        # CLEAN MATCHES
-        # ----------------------------
-        # ----------------------------
-        # ROBUST CLEANING (Fixes Season Strings like '2020/21')
-        # ----------------------------
-        
-        # ----------------------------
-        # ROBUST CLEANING (Fixes Season Strings & Date Types)
-        # ----------------------------
-        def safe_season(val):
-            if pd.isna(val): return val
-            val_str = str(val).strip()
-            if '/' in val_str: # Handles "2020/21" -> 2020
-                try: return int(val_str.split('/')[0])
-                except: return pd.to_numeric(val_str, errors='coerce')
-            return pd.to_numeric(val_str, errors='coerce')
 
-        # Clean Seasons properly so filtering doesn't return empty
-        matches['season'] = matches.get('season').apply(safe_season)
-        balls['season'] = balls.get('season').apply(safe_season)
+        for df in [matches, balls]:
+            df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').astype('Int64')
+            df['season'] = pd.to_numeric(df.get('season'), errors='coerce').astype('Int64')
 
-        # Standardize IDs
-        matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce').astype('Int64')
-        balls['match_id'] = pd.to_numeric(balls['match_id'], errors='coerce').astype('Int64')
-        
-        # Keep as datetime64 for comparisons (Crucial for ML model and Sorting)
+        # 2. Handle Dates (Keep as datetime64 for ML and sorting consistency)
         matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
         
-        matches['venue'] = matches.get('venue', matches.get('ground', '')).astype(str).str.split(',').str[0]
+        # 3. Standardize Venue names (Match Center uses this for filtering)
+        matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
-        # Standardize numeric ball data
+        # 4. Standardize Numeric Ball Data
         numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
-        # Map venue into balls with a fallback
+        # 5. Map Venue into Balls (Crucial for Venue Analysis Page)
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
-        # Normalize text fields
+        # 6. Normalize Text Fields (Fixes Fantasy Scout Player Names)
         text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
             if c in balls.columns:
                 balls[c] = normalize_text_series(balls[c])
                 if c == "wicket_kind":
+                    # Lowercase and strip for bowling stats logic
                     balls[c] = balls[c].replace({"": None})
                     balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
-        
 
         # --- DATA SANITY CHECKS ---
-        missing_match_ids = matches['match_id'].isna().sum()
-        if missing_match_ids > 0:
-            st.sidebar.warning(f"⚠️ {missing_match_ids} matches have invalid IDs.")
-            
-        unmapped_venues = balls[balls['venue'] == "Unknown Venue"].shape[0]
-        if unmapped_venues > 0:
-            st.sidebar.info(f"ℹ️ {unmapped_venues} balls could not be mapped to a venue.")
+        unmapped_v = balls[balls['venue'] == "Unknown Venue"].shape[0]
+        if unmapped_v > 0:
+            st.sidebar.info(f"ℹ️ {unmapped_v} balls are missing match details.")
+
         return matches, balls
-        
-    except Exception as e:
-        st.error(f"Supabase fetch failed: {e}")
-        st.stop()
 
 # Load data
 matches_df, balls_df = load_data()
@@ -827,6 +800,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

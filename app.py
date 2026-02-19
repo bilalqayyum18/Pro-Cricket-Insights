@@ -99,6 +99,8 @@ def validate_phone(phone):
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    
+    /* Global Styles */
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
@@ -106,6 +108,38 @@ st.markdown("""
         background-color: #0f172a;
         color: #f1f5f9;
     }
+
+    /* Animations */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .premium-box, .prediction-card, [data-testid="stMetric"] {
+        animation: fadeIn 0.6s ease-out;
+    }
+
+    /* Result Badges */
+    .badge {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: white;
+        display: inline-block;
+        margin-left: 10px;
+    }
+    .badge-runs { background-color: #059669; border: 1px solid #10b981; }
+    .badge-wickets { background-color: #2563eb; border: 1px solid #3b82f6; }
+
+    /* Impact Players Polish */
+    .player-headshot {
+        border-radius: 50%;
+        border: 3px solid #38bdf8;
+        box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
+        margin-bottom: 15px;
+    }
+
+    /* Standard Components */
     [data-testid="stMetric"] {
         background: rgba(30, 41, 59, 0.7) !important;
         border: 1px solid rgba(51, 65, 85, 0.5) !important;
@@ -113,15 +147,9 @@ st.markdown("""
         padding: 20px !important;
         backdrop-filter: blur(10px);
     }
-    [data-testid="stMetricLabel"] {
-        color: #94a3b8 !important;
-        font-weight: 600 !important;
-        font-size: 0.9rem !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #38bdf8 !important;
-        font-weight: 800 !important;
-    }
+    [data-testid="stMetricLabel"] { color: #94a3b8 !important; font-weight: 600 !important; }
+    [data-testid="stMetricValue"] { color: #38bdf8 !important; font-weight: 800 !important; }
+
     .prediction-card {
         background: #1e293b;
         border-radius: 12px;
@@ -130,17 +158,8 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     }
-    .prediction-card h4 {
-        color: #94a3b8;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        margin-bottom: 8px;
-    }
-    .prediction-card h1 {
-        color: #38bdf8;
-        margin: 0;
-        font-size: 2.5rem;
-    }
+    .prediction-card h1 { color: #38bdf8; margin: 0; font-size: 2.5rem; }
+
     .premium-box {
         background: #1e293b;
         border-radius: 12px;
@@ -148,18 +167,25 @@ st.markdown("""
         border: 1px solid #334155;
         margin-bottom: 20px;
     }
-    .disclaimer-box {
-        background-color: #0f172a;
-        border: 1px solid #1e293b;
-        border-left: 4px solid #ef4444;
-        padding: 24px;
-        border-radius: 6px;
-        margin-top: 40px;
-        margin-bottom: 60px;
-        color: #94a3b8;
-        font-size: 0.85rem;
-        line-height: 1.6;
+
+    [data-testid="stSidebar"] {
+        background-color: #0f172a !important;
+        border-right: 1px solid #1e293b;
     }
+
+    .stButton>button {
+        background-color: #38bdf8 !important;
+        color: #0f172a !important;
+        font-weight: 800 !important;
+        border-radius: 8px !important;
+        border: none !important;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+    }
+
     .footer {
         position: fixed;
         left: 0;
@@ -173,37 +199,9 @@ st.markdown("""
         border-top: 1px solid #1e293b;
         z-index: 1000;
     }
-    [data-testid="stSidebar"] {
-        background-color: #0f172a !important;
-        border-right: 1px solid #1e293b;
-    }
-    .stRadio > label {
-        font-weight: 600 !important;
-        color: #f1f5f9 !important;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: transparent;
-        border-radius: 4px;
-        color: #94a3b8;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #38bdf8 !important;
-        border-bottom-color: #38bdf8 !important;
-    }
-    .stButton>button {
-        background-color: #38bdf8 !important;
-        color: #0f172a !important;
-        font-weight: 800 !important;
-        border-radius: 8px !important;
-        border: none !important;
-        padding: 10px 24px !important;
-    }
 </style>
 <div class="footer">
-    <b>INDEPENDENT FAN PORTAL:</b> Not affiliated with, endorsed by, or associated with the PSL or PCB. PRO CRICKET INSIGHTS © 2026 | For Analytical Purposes Only.
+    <b>INDEPENDENT FAN PORTAL:</b> Not affiliated with, endorsed by, or associated with the PSL or PCB. PRO CRICKET INSIGHTS © 2026
 </div>
 """, unsafe_allow_html=True)
 
@@ -562,13 +560,15 @@ if page == "Match Center":
         
         display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
         
+        badge_class = "badge-runs" if mm['win_by'].strip().lower() == 'runs' else "badge-wickets"
         st.markdown(f"""
         <div class="premium-box" style="border-left: 5px solid #38bdf8;">
             <h2 style='margin:0;'>{mm['team1']} vs {mm['team2']}</h2>
-            <p style='color:#94a3b8; font-size:1.1rem; margin:5px 0;'>🏟️ {mm['venue']} | 📅 {display_date}</p>
+            <p style='color:#94a3b8; font-size:1.1rem; margin:5px 0;'>🏟️ {mm['venue']} | 📅 {mm['date'].strftime('%Y-%m-%d')}</p>
             <hr style='border-color:#334155;'>
-            <p><b>Toss:</b> {mm['toss_winner']} won and chose to {mm['toss_decision']}</p>
-            <p style='font-size:1.2rem; color:#38bdf8;'><b>Result:</b> {mm['winner']} won by {mm['win_margin']} {mm['win_by']}</p>
+            <p style='font-size:1.2rem;'><b>Result:</b> {mm['winner']} won by 
+                <span class="badge {badge_class}">{mm['win_margin']} {mm['win_by']}</span>
+            </p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -721,6 +721,29 @@ elif page == "Pro Prediction":
                         res1, res2 = st.columns(2)
                         res1.markdown(f"<div class='prediction-card'><h4>{team1}</h4><h1>{t1_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
                         res2.markdown(f"<div class='prediction-card'><h4>{team2}</h4><h1>{t2_prob}%</h1>Win Probability</div>", unsafe_allow_html=True)
+                        # ... existing probability calculation ...
+                        
+                        st.markdown("### AI Decision Intelligence")
+                        
+                        # Calculate impact weights (Simplified logic based on feature values)
+                        venue_impact = v_t1_val if probs[1] > 0.5 else v_t2_val
+                        form_impact = live_form(team1) if probs[1] > 0.5 else live_form(team2)
+                        
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.write("**Venue Advantage**")
+                            st.progress(venue_impact)
+                            st.caption(f"{int(venue_impact*100)}% Match fit")
+                        with col_b:
+                            st.write("**Recent Form**")
+                            st.progress(form_impact)
+                            st.caption(f"{int(form_impact*100)}% Momentum")
+                        with col_c:
+                            st.write("**H2H Dominance**")
+                            st.progress(h2h_val if probs[1] > 0.5 else (1-h2h_val))
+                            st.caption("Historical edge")
+
+                        st.info(f"💡 **AI Insight:** {team1 if probs[1] > 0.5 else team2} is favored primarily due to {'strong venue history' if venue_impact > 0.6 else 'superior recent form'}.")
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -837,6 +860,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

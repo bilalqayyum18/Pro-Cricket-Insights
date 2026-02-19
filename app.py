@@ -641,11 +641,25 @@ if page == "Match Center":
             st.markdown("### Performance Charts")
             chart_col1, chart_col2 = st.columns(2)
             
-            #1. Match Progression (Worm)
+        team_map = {}
+        for inn in [1, 2]:
+            # Get the team name for this inning from the ball-by-ball data
+            team_name = mb[mb['innings'] == inn]['batting_team'].unique()
+            if len(team_name) > 0:
+                team_map[inn] = team_name[0]
+            else:
+                team_map[inn] = f"Innings {inn}"
+        # ----------------------------------------------
+
+        if not mb.empty:
+            st.markdown("### Performance Charts")
+            chart_col1, chart_col2 = st.columns(2)
+            
+            # 1. Match Progression (Worm)
             with chart_col1:
                 mb_c = mb.copy()
                 worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
-                # FIX: Map innings number to team name for the legend and color
+                # This will now work because team_map is defined above
                 worm['Team'] = worm['innings'].map(team_map)
                 
                 fig_worm = px.line(worm, x='over', y='runs_total', color='Team', 
@@ -656,10 +670,9 @@ if page == "Match Center":
             # 2. Runs Per Over Progression
             with chart_col2:
                 mb_rr = mb.copy()
-                # Calculate RPO for each over
                 mb_rr['over_runs'] = mb_rr.groupby(['innings', 'over'])['runs_total'].transform('sum')
                 rr_df = mb_rr[['innings', 'over', 'over_runs']].drop_duplicates()
-                # FIX: Map innings number to team name for the legend and color
+                # Map using the same team_map
                 rr_df['Team'] = rr_df['innings'].map(team_map)
         
                 fig_rr = px.bar(rr_df, x='over', y='over_runs', color='Team', 
@@ -951,4 +964,5 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 

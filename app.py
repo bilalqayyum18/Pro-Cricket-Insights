@@ -26,15 +26,19 @@ def extract_data(resp):
 def normalize_text_series(series):
     return series.fillna("").astype(str).str.strip()
 
-def get_supabase_client(session=None):
+def get_supabase_client(session=None, access_token=None): # Added access_token=None
     if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         
-        # If we have a session, we need to pass the access token to avoid JWT expiry errors
-        if session and hasattr(session, 'access_token'):
+        # Priority: use manual access_token if provided, otherwise use session
+        token = access_token
+        if not token and session and hasattr(session, 'access_token'):
+            token = session.access_token
+            
+        if token:
             client = create_client(url, key)
-            client.postgrest.auth(session.access_token)
+            client.postgrest.auth(token)
             return client
         
         return create_client(url, key)
@@ -210,12 +214,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DATA LOADING (MIGRATED TO SUPABASE) ---
-@st.cache_data(ttl=86400)
+@st.cache_data(show_spinner="Analyzing match archives...")
 def load_data():
     if supabase_status != "Connected":
         st.error(f"Supabase Connection Failed: {supabase_status}")
         st.stop()
     
+    # Updated to pass access_token if it exists in session state
     client = get_supabase_client(session=None, access_token=st.session_state.get("access_token"))
     if client is None:
         st.error("Supabase client not available")
@@ -233,15 +238,14 @@ def load_data():
             
         # FETCH BALL BY BALL (FIXED PAGINATION)
         all_balls = []
-        batch_size = 1000 # Use standard batch size
+        batch_size = 1000 
         start = 0
         
-        # Progress bar for UX since ball_by_ball is large
+        # Progress bar for UX
         progress_text = "Downloading ball-by-ball data..."
         progress_bar = st.sidebar.progress(0, text=progress_text)
         
         while True:
-            # Explicitly select all columns identified in your database schema
             response = client.table("ball_by_ball") \
                 .select("""
                     id, match_id, innings, batting_team, bowling_team, 
@@ -263,7 +267,7 @@ def load_data():
                 break
             
             start += batch_size
-            prog = min(start / 150000, 0.99) # Updated estimate for ~147k rows
+            prog = min(start / 150000, 0.99)
             progress_bar.progress(prog, text=f"Fetched {len(all_balls)} records...")
             
         progress_bar.empty()
@@ -282,7 +286,7 @@ def load_data():
         matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
         matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
-        # Ensure all columns used in math operations are treated as numbers
+        # Numeric conversion
         numeric_cols = [
             'runs_batter', 'runs_extras', 'runs_total', 'wide', 
             'noball', 'is_wicket', 'innings', 'over', 'ball', 'season', 'match_id'
@@ -294,7 +298,7 @@ def load_data():
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
-        # List all text columns to ensure they exist before normalization
+        # Text normalization
         text_cols = [
             "wicket_kind", "batter", "bowler", "non_striker", 
             "player_out", "fielders", "batting_team", "bowling_team"
@@ -310,16 +314,16 @@ def load_data():
         if unmapped_v > 0:
             st.sidebar.info(f"ℹ️ {unmapped_v} balls are missing match details.")
 
-        all_players = sorted(list(set(balls['batter'].unique()) | set(balls['bowler'].unique())))
-        return matches, balls, all_player
+        # Corrected: Create list of players and return 3 items
+        all_players_list = sorted(list(set(balls['batter'].unique()) | set(balls['bowler'].unique())))
+        return matches, balls, all_players_list
+
     except Exception as e:
         st.error(f"Data process failed: {e}")
         st.stop()
 
-# Initialize data
-# Update this line to catch the 3rd item (all_players) returned by the function
+# Initialize data correctly using the returned triple
 matches_df, balls_df, all_players = load_data()
-# Ensure these lines are at the end of your load_data() function
 
 
 # --- ML MODEL ENGINE ---
@@ -900,6 +904,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

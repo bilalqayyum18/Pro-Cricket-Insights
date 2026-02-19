@@ -462,20 +462,41 @@ def get_inning_scorecard(df, innings_no):
 
 # --- NAVIGATION ---
 st.sidebar.title("Pakistan League Intelligence")
-page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
-# Place this around line 315, after the 'Navigation' radio button
-st.divider()
+
+# 1. Define the options list explicitly so we can find the index
+nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"]
+
+# 2. Sync session state with the radio selection
+if "page_nav" not in st.session_state:
+    st.session_state.page_nav = "Season Dashboard"
+
+# Find the index of the current page to keep the radio button in sync
+try:
+    default_index = nav_options.index(st.session_state.page_nav)
+except ValueError:
+    default_index = 0
+
+# 3. The Radio Button - Note the 'index' and 'key'
+page = st.sidebar.radio("Navigation", nav_options, index=default_index, key="navigation_radio")
+
+# Update the state if the user clicks manually
+st.session_state.page_nav = page
+
+# --- QUICK PLAYER LOOKUP ---
+st.sidebar.divider()
 search_query = st.sidebar.text_input("🔍 Quick Player Lookup")
+
 if search_query:
-    # Now all_players exists globally in the script
     found_players = [p for p in all_players if search_query.lower() in p.lower()]
     if found_players:
         selected_from_search = st.sidebar.selectbox("Matches found:", found_players)
         if st.sidebar.button("Go to Profile", use_container_width=True):
+            # 1. Set the override player for the Impact Players page
             st.session_state.selected_player_override = selected_from_search
-            # This trigger forces the radio button to change to Impact Players
-            # but we usually rely on the user clicking the radio or a rerun.
-            st.info(f"Go to 'Impact Players' to see {selected_from_search}")
+            # 2. Change the navigation state
+            st.session_state.page_nav = "Impact Players" 
+            # 3. Rerun to apply changes
+            st.rerun()
             
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
@@ -904,6 +925,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

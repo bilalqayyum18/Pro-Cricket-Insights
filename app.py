@@ -597,6 +597,18 @@ if page == "Match Center":
             fig_worm = px.line(worm, x='over', y='runs_total', color='innings', title="Match Progression", template="plotly_dark", labels={"over": "Overs", "runs_total": "Runs", "innings": "Innings"})
             st.plotly_chart(fig_worm, use_container_width=True)
 
+        # Create a Run-Rate progression chart
+        if not mb.empty:
+            # Calculate RPO for each over
+            mb['over_runs'] = mb.groupby(['innings', 'over'])['runs_total'].transform('sum')
+            rr_df = mb[['innings', 'over', 'over_runs']].drop_duplicates()
+    
+            fig_rr = px.bar(rr_df, x='over', y='over_runs', color='innings', 
+                barmode='group', title="Runs Scored per Over",
+                template="plotly_dark", 
+                color_discrete_sequence=['#38bdf8', '#818cf8'])
+            st.plotly_chart(fig_rr, use_container_width=True)
+
 elif page == "Pro Prediction":
     st.title("AI Match Predictor")
     if not st.session_state.user:
@@ -825,6 +837,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

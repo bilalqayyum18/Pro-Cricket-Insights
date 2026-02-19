@@ -111,14 +111,41 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- DATA LOADING ---
-@st.cache_data
+# --- DATA LOADING (INTEGRATED WITH SUPABASE) ---
+@st.cache_data(ttl=3600)
 def load_data():
-    matches = pd.read_csv("psl_matches_meta_clean.csv")
-    balls = pd.read_csv("psl_ball_by_ball_clean.csv")
+    # Attempt Supabase Loading
+    if supabase_status == "Connected":
+        try:
+            # Fetch matches
+            matches_res = supabase.table("matches").select("*").execute()
+            matches = pd.DataFrame(matches_res.data)
+            
+            # Fetch ball-by-ball
+            balls_res = supabase.table("ball_by_ball").select("*").execute()
+            balls = pd.DataFrame(balls_res.data)
+            
+            if not matches.empty and not balls.empty:
+                # Ensure date is properly typed after DB fetch
+                matches['date'] = pd.to_datetime(matches['date'])
+            else:
+                # Fallback to local if tables are empty
+                matches = pd.read_csv("psl_matches_meta_clean.csv")
+                balls = pd.read_csv("psl_ball_by_ball_clean.csv")
+                matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
+        except Exception:
+            # Fallback to local if query fails
+            matches = pd.read_csv("psl_matches_meta_clean.csv")
+            balls = pd.read_csv("psl_ball_by_ball_clean.csv")
+            matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
+    else:
+        # Standard local loading if no connection
+        matches = pd.read_csv("psl_matches_meta_clean.csv")
+        balls = pd.read_csv("psl_ball_by_ball_clean.csv")
+        matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
     
+    # Standard Pre-processing
     matches['venue'] = matches['venue'].str.split(',').str[0]
-    matches['date'] = pd.to_datetime(matches['date'], dayfirst=True)
     
     if 'over' not in balls.columns:
         balls['over'] = balls['ball'].astype(int)
@@ -410,7 +437,6 @@ if page == "Match Center":
         mb_c = mb.copy()
         mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
         worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-        # Change: Standardized labels and removed unprofessional data labels
         fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
                            title="Match Progression", template="plotly_dark",
                            labels={"over": "Overs", "runs_total_ball": "Runs", "innings": "Innings"})
@@ -427,12 +453,10 @@ elif page == "Pro Prediction":
         
         if supabase:
             try:
-                # 1. Fetch current Pro status safely from profiles
                 profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).execute()
                 if profile_res.data and len(profile_res.data) > 0:
                     st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
 
-                # 2. Count attempts in the LAST 24 HOURS from prediction_attempts
                 time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
                 usage_res = supabase.table("prediction_attempts")\
                     .select("id", count="exact")\
@@ -466,7 +490,6 @@ elif page == "Pro Prediction":
             with st.spinner("Loading historical models and encoders…"):
                 model, le_t, le_v, le_d = train_ml_model(matches_df)
 
-            
             with st.container():
                 st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
                 col1, col2, col3, col4 = st.columns(4)
@@ -483,17 +506,13 @@ elif page == "Pro Prediction":
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("PREDICT MATCH WINNER", use_container_width=True):
-                # --- LOGGING BLOCK FIX ---
                 if supabase:
                     try:
-                        # Log detailed attempt
                         supabase.table("prediction_attempts").insert({
                             "user_id": user_id,
                             "metadata": {"team1": team1, "team2": team2, "venue": venue}
                         }).execute()
                         
-                        # Sync with prediction_logs for aggregate tracking
-                        # Using upsert logic to ensure prediction_logs records data
                         supabase.table("prediction_logs").upsert({
                             "user_id": user_id,
                             "user_identifier": st.session_state.user.email,
@@ -509,7 +528,6 @@ elif page == "Pro Prediction":
                         st.info("Check RLS policies and table permissions in Supabase.")
                         st.stop()
 
-                # --- SIMULATION LOGIC ---
                 with st.spinner("Running Prediction Model: Analyzing Historical Variables..."):
                     time.sleep(1)
                     h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
@@ -531,7 +549,6 @@ elif page == "Pro Prediction":
                     })
                     
                     probs = model.predict_proba(input_data)[0]
-                    # Change: Rounded to 2 decimals as requested
                     t1_prob = f"{probs[1] * 100:.2f}"
                     t2_prob = f"{(1 - probs[1]) * 100:.2f}"
                     
@@ -544,9 +561,6 @@ elif page == "Pro Prediction":
                         st.info("Simulations Remaining: Unlimited")
                     else:
                         st.info(f"Simulations Remaining: {usage_left}")
-                    
-                    # NOTE: Removed st.rerun() from here to prevent the UI from clearing results immediately.
-                    # This allows the user to see the prediction results.
 
 elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -554,7 +568,6 @@ elif page == "Season Dashboard":
     s_balls = balls_df[balls_df['season'] == season]
     bat, bowl = get_batting_stats(s_balls), get_bowling_stats(s_balls)
     
-    # MVP Calculation (Simple weighted score)
     mvp = s_balls.groupby('batter').agg({'runs_batter': 'sum', 'is_wicket': 'sum'}).reset_index()
     mvp['score'] = (mvp['runs_batter'] * 1) + (mvp['is_wicket'] * 25)
     mvp = mvp.sort_values('score', ascending=False).head(10)
@@ -578,7 +591,6 @@ elif page == "Fantasy Scout":
     fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
     fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
     fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-    # Change: Removed unprofessional data labels and standardized axis titles
     fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', 
                      orientation='h', title="Fantasy Impact Ranking", template="plotly_dark",
                      labels={"pts": "Performance Points", "p_name": "Player"})
@@ -608,7 +620,6 @@ elif page == "Player Comparison":
     bat_all, bowl_all = get_batting_stats(balls_df), get_bowling_stats(balls_df)
     def get_p_stats(name):
         b, w = bat_all[bat_all['batter'] == name], bowl_all[bowl_all['bowler'] == name]
-        # Change: Reduced SR and Econ to 2 decimal points
         return {'Runs': int(b.iloc[0]['runs_batter']) if not b.empty else 0, 
                 'SR': round(float(b.iloc[0]['strike_rate']), 2) if not b.empty else 0.00,
                 'Wickets': int(w.iloc[0]['wickets']) if not w.empty else 0, 
@@ -636,7 +647,6 @@ elif page == "Umpire Records":
     st.title("Umpire Records")
     u = st.selectbox("Select Umpire", sorted(pd.concat([matches_df['umpire1'], matches_df['umpire2']]).unique()))
     um = matches_df[(matches_df['umpire1'] == u) | (matches_df['umpire2'] == u)]
-    # Change: Removed unprofessional data labels and standardized titles
     fig_ump = px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', 
                      template="plotly_dark", labels={"winner": "Winner Team", "count": "Match Count"})
     st.plotly_chart(fig_ump, use_container_width=True)

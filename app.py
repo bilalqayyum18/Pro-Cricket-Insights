@@ -10,15 +10,38 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 from xgboost import XGBClassifier
 
+# --- HELPERS ---
+def extract_data(resp):
+    """Safely extract data from Supabase response without triggering AttributeError."""
+    if resp is None:
+        return None
+    if hasattr(resp, "data"):
+        return resp.data
+    if isinstance(resp, dict):
+        return resp.get("data")
+    return None
+
+def normalize_text_series(series):
+    return series.fillna("").astype(str).str.strip()
+
+def get_supabase_client(session=None, access_token=None):
+    if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        client = create_client(url, key)
+        if access_token:
+            client.postgrest.auth(access_token)
+        return client
+    return None
+
 # --- SUPABASE CONNECTION ---
 supabase_status = "Disconnected"
 supabase: Client = None
 
 try:
-    # NOTE: allow either SUPABASE_KEY or SUPABASE_ANON_KEY in secrets for compatibility
-    if "SUPABASE_URL" in st.secrets and ("SUPABASE_KEY" in st.secrets or "SUPABASE_ANON_KEY" in st.secrets):
+    if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         url = st.secrets["SUPABASE_URL"]
-        key = st.secrets.get("SUPABASE_KEY", st.secrets.get("SUPABASE_ANON_KEY"))
+        key = st.secrets["SUPABASE_KEY"]
         # Create a persistent client instance
         supabase = create_client(url, key)
         supabase_status = "Connected"
@@ -42,39 +65,11 @@ if 'is_pro' not in st.session_state:
 if 'auth_view' not in st.session_state:
     st.session_state.auth_view = "login"
 
-# --- Robust Supabase client / session handling (REPLACED) ---
-def get_supabase_client(session=None, access_token=None):
-    """
-    Returns a supabase client. If session or access_token provided, attempt to attach it.
-    Handles different supabase-py versions gracefully.
-    """
-    if supabase is None:
-        return None
-    client = supabase  # reuse created client instance
-    if session:
-        try:
-            # many client versions expose .auth.session
-            client.auth.session = session
-        except Exception:
-            # some versions may not support assignment; ignore and continue with anon client
-            pass
-    elif access_token:
-        try:
-            # attempt to create a client keyed to the access_token (best-effort)
-            client = create_client(st.secrets["SUPABASE_URL"], access_token)
-        except Exception:
-            # fallback to previously created client
-            client = supabase
-    return client
+# --- PERSIST AUTH CONTEXT ---
+if st.session_state.access_token and supabase:
+    supabase.postgrest.auth(st.session_state.access_token)
 
-# Attach session to client if present
-if st.session_state.access_token:
-    supabase = get_supabase_client(
-        session={"access_token": st.session_state.access_token}, 
-        access_token=st.session_state.access_token
-    )
-
-# --- VALIDATION LOGIC (RESTORED COMPLETELY) ---
+# --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
     # Mobile: 11 digits max starting with 03xx
     if re.match(r'^03\d{9}$', identifier):
@@ -224,11 +219,10 @@ def load_data():
         
     try:
         # ----------------------------
-        # FETCH MATCHES (defensive)
+        # FETCH MATCHES
         # ----------------------------
         matches_res = client.table("matches").select("*").execute()
-        # support both dict-like and object responses
-        matches_data = getattr(matches_res, "data", matches_res.get("data", None)) if matches_res else None
+        matches_data = extract_data(matches_res)
         matches = pd.DataFrame(matches_data if matches_data else [])
         
         if matches.empty:
@@ -236,7 +230,7 @@ def load_data():
             st.stop()
             
         # ----------------------------
-        # FETCH BALL BY BALL IN BATCHES (defensive)
+        # FETCH BALL BY BALL IN BATCHES
         # ----------------------------
         all_balls = []
         batch_size = 10000
@@ -246,7 +240,7 @@ def load_data():
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
-            batch = getattr(response, "data", response.get("data", [])) if response else []
+            batch = extract_data(response)
             if not batch:
                 break
             all_balls.extend(batch)
@@ -261,7 +255,7 @@ def load_data():
             st.stop()
             
         # ----------------------------
-        # CLEAN MATCHES (defensive)
+        # CLEAN MATCHES
         # ----------------------------
         matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce')
         matches['season'] = pd.to_numeric(matches.get('season', pd.Series(dtype='float64')), errors='coerce')
@@ -269,7 +263,7 @@ def load_data():
         matches['venue'] = matches.get('venue', matches.get('ground', '')).astype(str).str.split(',').str[0]
         
         # ----------------------------
-        # CLEAN BALLS (defensive)
+        # CLEAN BALLS
         # ----------------------------
         balls['match_id'] = pd.to_numeric(balls.get('match_id', pd.Series(dtype='float64')), errors='coerce')
         balls['season'] = pd.to_numeric(balls.get('season', pd.Series(dtype='float64')), errors='coerce')
@@ -285,7 +279,7 @@ def load_data():
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
                 
-        # Normalize wicket_kind and other text fields
+        # Normalize text fields
         text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
             if c in balls.columns:
@@ -298,11 +292,10 @@ def load_data():
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map)
         
-        # Ensure match_id types are consistent
+        # Ensure types are consistent
         matches['match_id'] = matches['match_id'].astype('Int64')
         balls['match_id'] = balls['match_id'].astype('Int64')
         
-        # Ensure date column in matches is a python date for display formatting
         if 'date' in matches.columns:
             matches['date'] = pd.to_datetime(matches['date'], errors='coerce').dt.date
             
@@ -312,10 +305,10 @@ def load_data():
         st.error(f"Supabase fetch failed: {e}")
         st.stop()
 
-# Load the data into the dataframes
+# Load data
 matches_df, balls_df = load_data()
 
-# --- ML MODEL ENGINE (RESTORED COMPLETELY) ---
+# --- ML MODEL ENGINE ---
 @st.cache_resource
 def train_ml_model(df):
     model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']]\
@@ -387,7 +380,7 @@ def train_ml_model(df):
     model.fit(X, y)
     return model, le_team, le_venue, le_decision
 
-# --- ANALYTICS ENGINES (ADAPTED TO SCHEMA) ---
+# --- ANALYTICS ENGINES ---
 def get_batting_stats(df):
     if df.empty: return pd.DataFrame()
     bat = df.groupby('batter').agg({
@@ -446,7 +439,7 @@ def get_inning_scorecard(df, innings_no):
 st.sidebar.title("Pakistan League Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
 
-# --- AUTH / CONNECTION IN SIDEBAR (RESTORED COMPLETELY) ---
+# --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
         if st.session_state.auth_view == "login":
@@ -468,8 +461,9 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                                     # Fetch Pro Status
                                     try:
                                         profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
-                                        if profile_res.data and len(profile_res.data) > 0:
-                                            st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
+                                        profile_data = extract_data(profile_res)
+                                        if profile_data and len(profile_data) > 0:
+                                            st.session_state.is_pro = profile_data[0].get('is_pro', False)
                                         else:
                                             supabase.table("profiles").insert({
                                                 "id": res.user.id,
@@ -532,7 +526,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             st.session_state.is_pro = False
             st.rerun()
 
-# --- PAGE LOGIC (RESTORED COMPLETELY) ---
+# --- PAGE LOGIC ---
 if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
@@ -588,8 +582,9 @@ elif page == "Pro Prediction":
         if supabase:
             try:
                 profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).execute()
-                if profile_res.data and len(profile_res.data) > 0:
-                    st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
+                profile_data = extract_data(profile_res)
+                if profile_data and len(profile_data) > 0:
+                    st.session_state.is_pro = profile_data[0].get('is_pro', False)
                 
                 time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
                 usage_res = supabase.table("prediction_attempts")\
@@ -597,7 +592,7 @@ elif page == "Pro Prediction":
                     .eq("user_id", user_id)\
                     .gt("created_at", time_threshold)\
                     .execute()
-                attempts_count = usage_res.count if usage_res.count is not None else 0
+                attempts_count = usage_res.count if hasattr(usage_res, 'count') and usage_res.count is not None else 0
                 usage_left = max(0, 3 - attempts_count)
                 
                 if not st.session_state.is_pro and attempts_count >= 3:
@@ -792,8 +787,3 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
-
-
-
-
-

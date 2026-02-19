@@ -118,42 +118,60 @@ st.markdown("""
 def load_data():
     if supabase_status != "Connected":
         st.error(f"Supabase Connection Failed: {supabase_status}")
-        st.info("Check your Streamlit Secrets for SUPABASE_URL and SUPABASE_KEY.")
         st.stop()
 
     try:
-        # --- FETCH MATCHES (NO LIMIT) ---
-        matches_res = supabase.table("matches") \
-            .select("*") \
-            .range(0, 1000000) \
-            .execute()
-
+        # ----------------------------
+        # FETCH MATCHES (usually small)
+        # ----------------------------
+        matches_res = supabase.table("matches").select("*").execute()
         matches = pd.DataFrame(matches_res.data)
 
-        # --- FETCH BALL BY BALL (NO LIMIT) ---
-        balls_res = supabase.table("ball_by_ball") \
-            .select("*") \
-            .range(0, 2000000) \
-            .execute()
-
-        balls = pd.DataFrame(balls_res.data)
-
-        if matches.empty or balls.empty:
-            st.error("Data fetched but tables appear empty in Supabase.")
+        if matches.empty:
+            st.error("Matches table is empty.")
             st.stop()
 
         # ----------------------------
-        # MATCHES PREPROCESSING
+        # FETCH BALL BY BALL IN BATCHES
+        # ----------------------------
+        all_balls = []
+        batch_size = 10000
+        start = 0
+
+        while True:
+            response = supabase.table("ball_by_ball") \
+                .select("*") \
+                .range(start, start + batch_size - 1) \
+                .execute()
+
+            batch = response.data
+
+            if not batch:
+                break
+
+            all_balls.extend(batch)
+
+            if len(batch) < batch_size:
+                break
+
+            start += batch_size
+
+        balls = pd.DataFrame(all_balls)
+
+        if balls.empty:
+            st.error("Ball_by_ball table is empty.")
+            st.stop()
+
+        # ----------------------------
+        # CLEAN MATCHES
         # ----------------------------
         matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce')
         matches['season'] = pd.to_numeric(matches['season'], errors='coerce')
         matches['date'] = pd.to_datetime(matches['date'], errors='coerce')
-
-        matches['venue'] = matches['venue'].astype(str)
-        matches['venue'] = matches['venue'].str.split(',').str[0]
+        matches['venue'] = matches['venue'].astype(str).str.split(',').str[0]
 
         # ----------------------------
-        # BALLS PREPROCESSING
+        # CLEAN BALLS
         # ----------------------------
         balls['match_id'] = pd.to_numeric(balls['match_id'], errors='coerce')
         balls['season'] = pd.to_numeric(balls['season'], errors='coerce')
@@ -171,30 +189,16 @@ def load_data():
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
-        # ----------------------------
-        # FORCE VENUE MAP INTO BALLS
-        # ----------------------------
+        # Map venue into balls
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map)
-
-        # ----------------------------
-        # ENSURE STRING COLUMNS SAFE
-        # ----------------------------
-        string_cols = [
-            'batter', 'bowler', 'batting_team',
-            'bowling_team', 'wicket_kind',
-            'player_out'
-        ]
-
-        for col in string_cols:
-            if col in balls.columns:
-                balls[col] = balls[col].astype(str)
 
         return matches, balls
 
     except Exception as e:
-        st.error(f"Failed to fetch data: {str(e)}")
+        st.error(f"Supabase fetch failed: {e}")
         st.stop()
+
 
 # --- ML MODEL ENGINE (RESTORED COMPLETELY) ---
 @st.cache_resource
@@ -676,4 +680,5 @@ st.markdown("""
         Predictions are probabilistic and for entertainment only.
     </div>
     """, unsafe_allow_html=True)
+
 

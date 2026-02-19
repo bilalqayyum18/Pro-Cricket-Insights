@@ -229,73 +229,65 @@ def load_data():
             st.error("Matches table is empty.")
             st.stop()
             
-        # FETCH BALL BY BALL
+        # FETCH BALL BY BALL (FIXED PAGINATION)
         all_balls = []
-        batch_size = 10000
+        batch_size = 1000 # Use standard batch size
         start = 0
+        
+        # Progress bar for UX since ball_by_ball is large
+        progress_text = "Downloading ball-by-ball data..."
+        progress_bar = st.sidebar.progress(0, text=progress_text)
+        
         while True:
             response = client.table("ball_by_ball") \
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
+            
             batch = extract_data(response)
             if not batch:
                 break
+            
             all_balls.extend(batch)
             if len(batch) < batch_size:
                 break
-            start += batch_size
             
+            start += batch_size
+            # Update progress (assuming roughly 80k balls for PSL history)
+            prog = min(start / 80000, 0.99)
+            progress_bar.progress(prog, text=f"Fetched {len(all_balls)} records...")
+            
+        progress_bar.empty()
         balls = pd.DataFrame(all_balls if all_balls else [])
+        
         if balls.empty:
             st.error("Ball_by_ball table is empty.")
             st.stop()
 
-        # STANDARDIZATION & TIMESTAMP SYNC
-        # --- STANDARDIZATION & TIMESTAMP SYNC ---
-        # --- STANDARDIZATION & ALIGNMENT ---
+        # STANDARDIZATION
         for df in [matches, balls]:
             df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').astype('Int64')
-            df['season'] = pd.to_numeric(df.get('season'), errors='coerce').astype('Int64')
+            if 'season' in df.columns:
+                df['season'] = pd.to_numeric(df['season'], errors='coerce').astype('Int64')
 
-        # Robust Date Parsing (UTC)
-        matches['date'] = pd.to_datetime(
-            matches.get('date_ts').fillna(matches.get('date')), 
-            utc=True, errors='coerce'
-        )
+        matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
+        matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
-        # --- THE ALIGNMENT FIX ---
-        # Inherit Season and Date from Matches to Balls (Fixes alignment issues)
-        if not matches.empty and not balls.empty:
-            match_meta = matches.set_index('match_id')[['season', 'date', 'venue']].to_dict('index')
-            
-            # Map values from matches to balls using match_id
-            balls['season'] = balls['match_id'].map(lambda x: match_meta.get(x, {}).get('season')).fillna(balls.get('season'))
-            balls['date'] = balls['match_id'].map(lambda x: match_meta.get(x, {}).get('date')).fillna(pd.to_datetime(balls.get('match_date_ts'), utc=True, errors='coerce'))
-            balls['venue'] = balls['match_id'].map(lambda x: match_meta.get(x, {}).get('venue')).fillna("Unknown Venue")
-
-        # Standardize numeric ball columns
         numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
         for col in numeric_cols:
             if col in balls.columns:
-                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0).astype(int)
+                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
-        # Normalize text fields
-        text_cols = ["wicket_kind", "batter", "bowler", "player_out"]
+        venue_map = matches.set_index('match_id')['venue'].to_dict()
+        balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
+
+        text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
             if c in balls.columns:
-                balls[c] = normalize_text_series(balls[c]).str.lower().str.strip()
-                balls[c] = balls[c].replace({"": None, "nan": None})
-
-        # Final Cleanup: Remove timezone info for Streamlit chart compatibility
-        matches['date'] = matches['date'].dt.tz_localize(None)
-        balls['date'] = balls['date'].dt.tz_localize(None)
-
-        # Debug/Status
-        st.sidebar.success(f"Loaded {len(matches)} Matches & {len(balls)} Balls")
-        st.sidebar.info(f"Seasons found in Balls: {sorted(balls['season'].dropna().unique().tolist())}")
-
-        return matches, balls
+                balls[c] = normalize_text_series(balls[c])
+                if c == "wicket_kind":
+                    balls[c] = balls[c].replace({"": None})
+                    balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
 
         unmapped_v = balls[balls['venue'] == "Unknown Venue"].shape[0]
         if unmapped_v > 0:
@@ -541,7 +533,6 @@ if page == "Match Center":
     ml = matches_df[matches_df['season'] == s]
     def format_match_label(row):
         d = row['date']
-        # Handle both Timestamp and date objects safely
         d_str = d.strftime('%Y-%m-%d') if pd.notnull(d) else "Unknown Date"
         return f"{row['team1']} vs {row['team2']} ({d_str})"
     
@@ -551,7 +542,9 @@ if page == "Match Center":
         idx = ms.tolist().index(sel)
         mm = ml.iloc[idx]
         
-        # Safe display for the header
+        # Filter balls for the selected match (Fixed missing mb bug)
+        mb = balls_df[balls_df['match_id'] == mm['match_id']]
+        
         display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
         
         st.markdown(f"""
@@ -610,7 +603,6 @@ elif page == "Pro Prediction":
                     .gt("created_at", time_threshold)\
                     .execute()
                 
-                # APIResponse has a .count attribute, not a .get() method
                 attempts_count = getattr(usage_res, 'count', 0) or 0
                 usage_left = max(0, 3 - attempts_count)
                 
@@ -728,7 +720,6 @@ elif page == "Fantasy Scout":
     if not sf_balls.empty:
         b, w = get_batting_stats(sf_balls), get_bowling_stats(sf_balls)
         fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
-        # Fix: Properly check for empty or null strings instead of 0
         fan['p_name'] = fan['batter'].where((fan['batter'] != 0) & (fan['batter'] != ""), fan['bowler'])
         fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
         fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", template="plotly_dark")
@@ -775,7 +766,6 @@ elif page == "Player Comparison":
 
 elif page == "Venue Analysis":
     st.title("Venue Intelligence")
-    # Filter out empty or null venues for the selector
     valid_venues = [v for v in matches_df['venue'].unique() if v and str(v).lower() != 'nan' and str(v).strip() != '']
     v = st.selectbox("Select Venue", sorted(valid_venues))
     vm = matches_df[matches_df['venue'] == v]
@@ -809,12 +799,3 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-

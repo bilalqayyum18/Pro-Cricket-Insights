@@ -262,28 +262,44 @@ def load_data():
         # ----------------------------
         # CLEAN MATCHES
         # ----------------------------
-        matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce')
-        matches['season'] = pd.to_numeric(matches.get('season', pd.Series(dtype='float64')), errors='coerce')
-        matches['date'] = pd.to_datetime(matches.get('date', pd.Series(dtype='datetime64[ns]')), errors='coerce')
+        # ----------------------------
+        # ROBUST CLEANING (Fixes Season Strings like '2020/21')
+        # ----------------------------
+        
+        # ----------------------------
+        # ROBUST CLEANING (Fixes Season Strings & Date Types)
+        # ----------------------------
+        def safe_season(val):
+            if pd.isna(val): return val
+            val_str = str(val).strip()
+            if '/' in val_str: # Handles "2020/21" -> 2020
+                try: return int(val_str.split('/')[0])
+                except: return pd.to_numeric(val_str, errors='coerce')
+            return pd.to_numeric(val_str, errors='coerce')
+
+        # Clean Seasons properly so filtering doesn't return empty
+        matches['season'] = matches.get('season').apply(safe_season)
+        balls['season'] = balls.get('season').apply(safe_season)
+
+        # Standardize IDs
+        matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce').astype('Int64')
+        balls['match_id'] = pd.to_numeric(balls['match_id'], errors='coerce').astype('Int64')
+        
+        # Keep as datetime64 for comparisons (Crucial for ML model and Sorting)
+        matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
+        
         matches['venue'] = matches.get('venue', matches.get('ground', '')).astype(str).str.split(',').str[0]
-        
-        # ----------------------------
-        # CLEAN BALLS
-        # ----------------------------
-        balls['match_id'] = pd.to_numeric(balls.get('match_id', pd.Series(dtype='float64')), errors='coerce')
-        balls['season'] = pd.to_numeric(balls.get('season', pd.Series(dtype='float64')), errors='coerce')
-        balls['innings'] = pd.to_numeric(balls.get('innings', pd.Series(dtype='float64')), errors='coerce')
-        balls['over'] = pd.to_numeric(balls.get('over', pd.Series(dtype='float64')), errors='coerce')
-        balls['ball'] = pd.to_numeric(balls.get('ball', pd.Series(dtype='float64')), errors='coerce')
-        
-        numeric_cols = [
-            'runs_batter', 'runs_extras', 'runs_total', 'wide', 
-            'noball', 'bye', 'legbye', 'is_wicket'
-        ]
+
+        # Standardize numeric ball data
+        numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
-                
+
+        # Map venue into balls with a fallback
+        venue_map = matches.set_index('match_id')['venue'].to_dict()
+        balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
+
         # Normalize text fields
         text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
@@ -292,21 +308,7 @@ def load_data():
                 if c == "wicket_kind":
                     balls[c] = balls[c].replace({"": None})
                     balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
-                    
-        # Map venue into balls with a fallback for missing data
-        venue_map = matches.set_index('match_id')['venue'].to_dict()
-        balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
         
-        # Ensure types are consistent
-        matches['match_id'] = matches['match_id'].astype('Int64')
-        balls['match_id'] = balls['match_id'].astype('Int64')
-        
-        if 'date' in matches.columns:
-            # Convert to datetime and then to date objects
-            matches['date'] = pd.to_datetime(matches['date'], errors='coerce')
-            # Option: fill missing dates with a safe placeholder before converting to date
-            # matches['date'] = matches['date'].fillna(pd.Timestamp('1970-01-01'))
-            matches['date'] = matches['date'].dt.date
 
         # --- DATA SANITY CHECKS ---
         missing_match_ids = matches['match_id'].isna().sum()
@@ -328,9 +330,16 @@ matches_df, balls_df = load_data()
 # --- ML MODEL ENGINE ---
 @st.cache_resource
 def train_ml_model(df):
-    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']]\
-        .dropna()\
-        .sort_values('date')
+    # Ensure date column is datetime64 for proper sorting and comparison
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
+    initial_rows = len(df)
+    model_df = df[['team1', 'team2', 'venue', 'toss_winner', 'toss_decision', 'winner', 'date']].dropna()
+    model_df = model_df.sort_values('date')
+    
+    dropped = initial_rows - len(model_df)
+    if dropped > 0:
+        st.sidebar.info(f"ℹ️ ML model training on {len(model_df)} matches (dropped {dropped} with missing data).")
 
     def get_h2h_win_rate(t1, t2, date):
         relevant = df[
@@ -548,13 +557,19 @@ if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
-    ms = ml.apply(lambda x: f"{x['team1']} vs {x['team2']} ({x['date'].strftime('%Y-%m-%d') if pd.notnull(x.get('date')) else 'Unknown Date'})", axis=1)
+    def format_match_label(row):
+        d = row['date']
+        # Handle both Timestamp and date objects safely
+        d_str = d.strftime('%Y-%m-%d') if pd.notnull(d) else "Unknown Date"
+        return f"{row['team1']} vs {row['team2']} ({d_str})"
+    
+    ms = ml.apply(format_match_label, axis=1)
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
         idx = ms.tolist().index(sel)
         mm = ml.iloc[idx]
-        mb = balls_df[balls_df['match_id'] == mm['match_id']]
-       # Create a safe date string for the display
+        
+        # Safe display for the header
         display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
         
         st.markdown(f"""
@@ -812,6 +827,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

@@ -451,7 +451,17 @@ def get_inning_scorecard(df, innings_no):
 # --- NAVIGATION ---
 st.sidebar.title("Pakistan League Intelligence")
 page = st.sidebar.radio("Navigation", ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"])
-
+# Place this around line 315, after the 'Navigation' radio button
+st.divider()
+search_query = st.text_input("🔍 Quick Player Lookup")
+if search_query:
+    found_players = [p for p in all_players if search_query.lower() in p.lower()]
+    if found_players:
+        selected_from_search = st.selectbox("Matches found:", found_players)
+        if st.button("Go to Profile", use_container_width=True):
+            st.session_state.selected_player_override = selected_from_search
+            # This helps the app switch to the Impact Players page automatically
+            # st.query_params['page'] = "Impact Players" # Optional for URL sync
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
     if not st.session_state.user:
@@ -860,6 +870,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

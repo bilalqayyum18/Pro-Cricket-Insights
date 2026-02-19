@@ -267,7 +267,7 @@ def load_data():
                 break
             
             start += batch_size
-            prog = min(start / 150000, 0.99)
+            prog = min(start / 75000, 0.99)
             progress_bar.progress(prog, text=f"Fetched {len(all_balls)} records...")
             
         progress_bar.empty()
@@ -462,13 +462,19 @@ def get_inning_scorecard(df, innings_no):
 
 #NAVIGATION
 st.sidebar.title("Pakistan League Intelligence")
-
-# Define options as a list so we can find indices for redirection
 nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"]
 
-# Initialize page_nav state if it doesn't exist
 if "page_nav" not in st.session_state:
     st.session_state.page_nav = "Season Dashboard"
+
+try:
+    default_index = nav_options.index(st.session_state.page_nav)
+except ValueError:
+    default_index = 0
+
+# Define 'page' here so it's globally accessible for the conditional blocks below
+page = st.sidebar.radio("Navigation", nav_options, index=default_index, key="navigation_radio")
+st.session_state.page_nav = page
             
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
@@ -560,24 +566,28 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
 # --- PAGE LOGIC ---
 if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
+    
+    # 1. Season Selection
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
+    
+    # 2. Match Selection Labeling
     def format_match_label(row):
         d = row['date']
         d_str = d.strftime('%Y-%m-%d') if pd.notnull(d) else "Unknown Date"
         return f"{row['team1']} vs {row['team2']} ({d_str})"
     
     ms = ml.apply(format_match_label, axis=1)
+    
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
         idx = ms.tolist().index(sel)
         mm = ml.iloc[idx]
         
-        # Filter balls for the selected match (Fixed missing mb bug)
+        # 3. Filter balls for the selected match
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
         
-        display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
-        
+        # 4. Match Header UI
         badge_class = "badge-runs" if mm['win_by'].strip().lower() == 'runs' else "badge-wickets"
         st.markdown(f"""
         <div class="premium-box" style="border-left: 5px solid #38bdf8;">
@@ -590,42 +600,45 @@ if page == "Match Center":
         </div>
         """, unsafe_allow_html=True)
         
+        # 5. Scorecard Summary
         st.markdown("### Scorecard Summary")
-        sc1, sc2 = st.tabs([f"1st Innings", f"2nd Innings"])
-        with sc1:
-            bt, bl = get_inning_scorecard(mb, 1)
-            if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**")
-                c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**")
-                c2.dataframe(bl, use_container_width=True, hide_index=True)
-        with sc2:
-            bt, bl = get_inning_scorecard(mb, 2)
-            if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**")
-                c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**")
-                c2.dataframe(bl, use_container_width=True, hide_index=True)
+        sc1, sc2 = st.tabs(["1st Innings", "2nd Innings"])
         
+        for i, tab in enumerate([sc1, sc2], 1):
+            with tab:
+                bt, bl = get_inning_scorecard(mb, i)
+                if bt is not None:
+                    c1, c2 = st.columns(2)
+                    c1.markdown("**Batting**")
+                    c1.dataframe(bt, use_container_width=True, hide_index=True)
+                    c2.markdown("**Bowling**")
+                    c2.dataframe(bl, use_container_width=True, hide_index=True)
+        
+        # 6. Visual Analytics
         if not mb.empty:
-            mb_c = mb.copy()
-            worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
-            fig_worm = px.line(worm, x='over', y='runs_total', color='innings', title="Match Progression", template="plotly_dark", labels={"over": "Overs", "runs_total": "Runs", "innings": "Innings"})
-            st.plotly_chart(fig_worm, use_container_width=True)
-
-        # Create a Run-Rate progression chart
-        if not mb.empty:
-            # Calculate RPO for each over
-            mb['over_runs'] = mb.groupby(['innings', 'over'])['runs_total'].transform('sum')
-            rr_df = mb[['innings', 'over', 'over_runs']].drop_duplicates()
-    
-            fig_rr = px.bar(rr_df, x='over', y='over_runs', color='innings', 
-                barmode='group', title="Runs Scored per Over",
-                template="plotly_dark", 
-                color_discrete_sequence=['#38bdf8', '#818cf8'])
-            st.plotly_chart(fig_rr, use_container_width=True)
+            st.divider()
+            col_a, col_b = st.columns(2)
+            
+            # Worm Chart
+            with col_a:
+                mb_c = mb.copy()
+                worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
+                fig_worm = px.line(worm, x='over', y='runs_total', color='innings', 
+                                  title="Match Progression (Worm)", template="plotly_dark",
+                                  labels={"over": "Overs", "runs_total": "Total Runs"})
+                st.plotly_chart(fig_worm, use_container_width=True)
+            
+            # Run Rate Progression
+            with col_b:
+                mb_rr = mb.copy()
+                mb_rr['over_runs'] = mb_rr.groupby(['innings', 'over'])['runs_total'].transform('sum')
+                rr_df = mb_rr[['innings', 'over', 'over_runs']].drop_duplicates()
+                
+                fig_rr = px.bar(rr_df, x='over', y='over_runs', color='innings', 
+                                barmode='group', title="Runs Per Over",
+                                template="plotly_dark", 
+                                color_discrete_sequence=['#38bdf8', '#818cf8'])
+                st.plotly_chart(fig_rr, use_container_width=True)
 
 elif page == "Pro Prediction":
     st.title("AI Match Predictor")
@@ -921,4 +934,5 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 

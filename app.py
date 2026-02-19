@@ -151,6 +151,10 @@ def load_data():
             lb = balls['legbyes'] if 'legbyes' in balls.columns else 0
             balls['extra_runs'] = w + nb + b + lb
 
+        # Ensure numeric types
+        if 'runs_batter' in balls.columns:
+            balls['runs_batter'] = pd.to_numeric(balls['runs_batter'], errors='coerce').fillna(0)
+
         return matches, balls
 
     except Exception as e:
@@ -419,13 +423,14 @@ if page == "Match Center":
                 c1.markdown("**Batting**"); c1.dataframe(bt, use_container_width=True, hide_index=True)
                 c2.markdown("**Bowling**"); c2.dataframe(bl, use_container_width=True, hide_index=True)
 
-        mb_c = mb.copy()
-        mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
-        worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-        fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
-                           title="Match Progression", template="plotly_dark",
-                           labels={"over": "Overs", "runs_total_ball": "Runs", "innings": "Innings"})
-        st.plotly_chart(fig_worm, use_container_width=True)
+        if not mb.empty:
+            mb_c = mb.copy()
+            mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
+            worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
+            fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
+                               title="Match Progression", template="plotly_dark",
+                               labels={"over": "Overs", "runs_total_ball": "Runs", "innings": "Innings"})
+            st.plotly_chart(fig_worm, use_container_width=True)
 
 elif page == "Pro Prediction":
     st.title("AI Match Predictor")
@@ -529,33 +534,41 @@ elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
     st.title(f"Tournament Summary: {season}")
     s_balls = balls_df[balls_df['season'] == season]
-    bat, bowl = get_batting_stats(s_balls), get_bowling_stats(s_balls)
     
-    mvp = s_balls.groupby('batter').agg({'runs_batter': 'sum', 'is_wicket': 'sum'}).reset_index()
-    mvp['score'] = (mvp['runs_batter'] * 1) + (mvp['is_wicket'] * 25)
-    mvp = mvp.sort_values('score', ascending=False).head(10)
+    if not s_balls.empty:
+        bat, bowl = get_batting_stats(s_balls), get_bowling_stats(s_balls)
+        
+        mvp = s_balls.groupby('batter').agg({'runs_batter': 'sum', 'is_wicket': 'sum'}).reset_index()
+        mvp['score'] = (mvp['runs_batter'] * 1) + (mvp['is_wicket'] * 25)
+        mvp = mvp.sort_values('score', ascending=False).head(10)
 
-    m1, m2, m3 = st.columns(3)
-    if not bat.empty: m1.metric("Orange Cap", bat.iloc[0]['batter'], f"{int(bat.iloc[0]['runs_batter'])} Runs")
-    if not bowl.empty: m2.metric("Purple Cap", bowl.iloc[0]['bowler'], f"{int(bowl.iloc[0]['wickets'])} Wickets")
-    if not mvp.empty: m3.metric("Top MVP", mvp.iloc[0]['batter'], f"{int(mvp.iloc[0]['score'])} Pts")
+        m1, m2, m3 = st.columns(3)
+        if not bat.empty: m1.metric("Orange Cap", bat.iloc[0]['batter'], f"{int(bat.iloc[0]['runs_batter'])} Runs")
+        if not bowl.empty: m2.metric("Purple Cap", bowl.iloc[0]['bowler'], f"{int(bowl.iloc[0]['wickets'])} Wickets")
+        if not mvp.empty: m3.metric("Top MVP", mvp.iloc[0]['batter'], f"{int(mvp.iloc[0]['score'])} Pts")
 
-    st.subheader("Top Performers")
-    c1, c2 = st.columns(2)
-    c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
-    c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark"), use_container_width=True)
-    st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark"), use_container_width=True)
+        st.subheader("Top Performers")
+        c1, c2 = st.columns(2)
+        if not bat.empty:
+            c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
+        if not bowl.empty:
+            c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark"), use_container_width=True)
+        if not mvp.empty:
+            st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark"), use_container_width=True)
+    else:
+        st.warning(f"No match data found for season {season}")
 
 elif page == "Fantasy Scout":
     st.title("Fantasy Team Optimizer")
     season_f = st.selectbox("Data Context", sorted(matches_df['season'].unique(), reverse=True))
     sf_balls = balls_df[balls_df['season'] == season_f]
-    b, w = get_batting_stats(sf_balls), get_bowling_stats(sf_balls)
-    fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
-    fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
-    fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
-    fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", template="plotly_dark")
-    st.plotly_chart(fig_fan, use_container_width=True)
+    if not sf_balls.empty:
+        b, w = get_batting_stats(sf_balls), get_bowling_stats(sf_balls)
+        fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
+        fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
+        fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
+        fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", template="plotly_dark")
+        st.plotly_chart(fig_fan, use_container_width=True)
 
 elif page == "Impact Players":
     st.title("Player Analysis & Rankings")
@@ -608,9 +621,10 @@ elif page == "Umpire Records":
     st.title("Umpire Records")
     u = st.selectbox("Select Umpire", sorted(pd.concat([matches_df['umpire1'], matches_df['umpire2']]).unique()))
     um = matches_df[(matches_df['umpire1'] == u) | (matches_df['umpire2'] == u)]
-    fig_ump = px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', 
-                     template="plotly_dark", labels={"winner": "Winner Team", "count": "Match Count"})
-    st.plotly_chart(fig_ump, use_container_width=True)
+    if not um.empty:
+        fig_ump = px.bar(um['winner'].value_counts().reset_index(), x='winner', y='count', 
+                         template="plotly_dark", labels={"winner": "Winner Team", "count": "Match Count"})
+        st.plotly_chart(fig_ump, use_container_width=True)
 
 elif page == "Hall of Fame":
     st.title("All-Time Records")

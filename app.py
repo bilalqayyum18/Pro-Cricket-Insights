@@ -844,28 +844,41 @@ elif page == "Fantasy Scout":
 elif page == "Impact Players":
     st.title("Impact Players")
     
-    # Check if a player was sent here from the sidebar search
+    # 1. Use the pre-calculated all_players list from load_data
+    # (This is much faster than recalculating set(batter | bowler) on every click)
+    
+    # 2. Check if a player was sent here from the sidebar search
     default_player_index = 0
     if 'selected_player_override' in st.session_state:
         try:
+            # Match the override name to the index in our master list
             default_player_index = all_players.index(st.session_state.selected_player_override)
-            # Clear it so it doesn't force this player every time you visit the page
+            # Clear it so the user can freely change players afterward
             del st.session_state.selected_player_override
-        except ValueError:
+        except (ValueError, NameError):
             default_player_index = 0
-    p = st.selectbox("Select Player", sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique()))))
+
+    # 3. The Selectbox - NOW USING THE INDEX
+    p = st.selectbox("Select Player", all_players, index=default_player_index)
+    
+    # 4. Data Processing & UI
     all_bat, all_bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
+    
+    # Wrap stats in a premium-box for the polish we discussed earlier
+    st.markdown(f'<div class="premium-box"><h3>Performance Dashboard: {p}</h3></div>', unsafe_allow_html=True)
+    
     ca, cb = st.columns(2)
     bp = all_bat[all_bat['batter'] == p]
     if not bp.empty:
         with ca:
             st.metric("Total Runs", int(bp.iloc[0]['runs_batter']))
-            st.metric("Strike Rate", bp.iloc[0]['strike_rate'])
+            st.metric("Strike Rate", f"{bp.iloc[0]['strike_rate']:.2f}")
+    
     wp = all_bowl[all_bowl['bowler'] == p]
     if not wp.empty:
         with cb:
             st.metric("Total Wickets", int(wp.iloc[0]['wickets']))
-            st.metric("Economy", wp.iloc[0]['economy'])
+            st.metric("Economy", f"{wp.iloc[0]['economy']:.2f}")
 
 elif page == "Player Comparison":
     st.title("Head-to-Head Comparison")
@@ -925,6 +938,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

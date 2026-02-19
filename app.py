@@ -61,7 +61,7 @@ except Exception as e:
     supabase_status = f"Error: {str(e)}"
 
 # --- CONFIG & THEME ---
-st.set_page_config(page_title="Pro Cricket Insights", layout="wide", page_icon="🏏")
+st.set_page_config(page_title="Fantasy XI - Pakistan Cricket League", layout="wide", page_icon="🏏")
 
 # --- INITIALIZE SESSION STATE ---
 if 'user' not in st.session_state:
@@ -461,7 +461,7 @@ def get_inning_scorecard(df, innings_no):
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
 
 # --- NAVIGATION ---
-st.sidebar.title("Pakistan League Intelligence")
+st.sidebar.title("FANTASY XI - Pakistan Cricket League")
 
 # 1. Define the options list explicitly so we can find the index
 nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"]
@@ -968,6 +968,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

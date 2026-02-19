@@ -239,8 +239,16 @@ def load_data():
         progress_bar = st.sidebar.progress(0, text=progress_text)
         
         while True:
+            # Explicitly select all columns identified in your database schema
             response = client.table("ball_by_ball") \
-                .select("match_id, innings, batter, bowler, runs_batter, wide, is_wicket, season") \
+                .select("""
+                    id, match_id, innings, batting_team, bowling_team, 
+                    over, ball, batter, bowler, non_striker, 
+                    runs_batter, runs_extras, runs_total, wide, noball, 
+                    bye, legbye, is_wicket, player_out, wicket_kind, 
+                    fielders, review_by, review_outcome, concussion_sub, 
+                    season, match_date_ts
+                """) \
                 .range(start, start + batch_size - 1) \
                 .execute()
             
@@ -253,8 +261,7 @@ def load_data():
                 break
             
             start += batch_size
-            # Update progress (assuming roughly 80k balls for PSL history)
-            prog = min(start / 80000, 0.99)
+            prog = min(start / 150000, 0.99) # Updated estimate for ~147k rows
             progress_bar.progress(prog, text=f"Fetched {len(all_balls)} records...")
             
         progress_bar.empty()
@@ -273,7 +280,11 @@ def load_data():
         matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
         matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
-        numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
+        # Ensure all columns used in math operations are treated as numbers
+        numeric_cols = [
+            'runs_batter', 'runs_extras', 'runs_total', 'wide', 
+            'noball', 'is_wicket', 'innings', 'over', 'ball', 'season', 'match_id'
+        ]
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
@@ -281,7 +292,11 @@ def load_data():
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
-        text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
+        # List all text columns to ensure they exist before normalization
+        text_cols = [
+            "wicket_kind", "batter", "bowler", "non_striker", 
+            "player_out", "fielders", "batting_team", "bowling_team"
+        ]
         for c in text_cols:
             if c in balls.columns:
                 balls[c] = normalize_text_series(balls[c])
@@ -799,4 +814,5 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 

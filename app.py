@@ -590,6 +590,7 @@ if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
+    
     def format_match_label(row):
         d = row['date']
         d_str = d.strftime('%Y-%m-%d') if pd.notnull(d) else "Unknown Date"
@@ -604,9 +605,14 @@ if page == "Match Center":
         # Filter balls for the selected match
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
         
-        display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
+        # --- Pre-calculate team names for tabs ---
+        team_map = {}
+        for inn in [1, 2]:
+            t_name = mb[mb['innings'] == inn]['batting_team'].unique()
+            team_map[inn] = t_name[0] if len(t_name) > 0 else f"Innings {inn}"
         
-        badge_class = "badge-runs" if mm['win_by'].strip().lower() == 'runs' else "badge-wickets"
+        # Match Header UI
+        badge_class = "badge-runs" if str(mm['win_by']).strip().lower() == 'runs' else "badge-wickets"
         st.markdown(f"""
         <div class="premium-box" style="border-left: 5px solid #38bdf8;">
             <h2 style='margin:0;'>{mm['team1']} vs {mm['team2']}</h2>
@@ -618,42 +624,40 @@ if page == "Match Center":
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("### Scorecard Summary")
-        sc1, sc2 = st.tabs([f"1st Innings", f"2nd Innings"])
-        with sc1:
-            bt, bl = get_inning_scorecard(mb, 1)
-            if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**")
-                c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**")
-                c2.dataframe(bl, use_container_width=True, hide_index=True)
-        with sc2:
-            bt, bl = get_inning_scorecard(mb, 2)
-            if bt is not None:
-                c1, c2 = st.columns(2)
-                c1.markdown("**Batting**")
-                c1.dataframe(bt, use_container_width=True, hide_index=True)
-                c2.markdown("**Bowling**")
-                c2.dataframe(bl, use_container_width=True, hide_index=True)
+        st.markdown("### 📊 Broadcast Scorecard")
         
-        if not mb.empty:
-            st.markdown("### Performance Charts")
-            chart_col1, chart_col2 = st.columns(2)
-            
-        team_map = {}
-        for inn in [1, 2]:
-            # Get the team name for this inning from the ball-by-ball data
-            team_name = mb[mb['innings'] == inn]['batting_team'].unique()
-            if len(team_name) > 0:
-                team_map[inn] = team_name[0]
-            else:
-                team_map[inn] = f"Innings {inn}"
-        # ----------------------------------------------
+        # Dynamic Tab Labels showing Team Names
+        sc1, sc2 = st.tabs([f"1st Innings: {team_map[1]}", f"2nd Innings: {team_map[2]}"])
+        
+        for i, tab in enumerate([sc1, sc2], 1):
+            with tab:
+                bt, bl = get_inning_scorecard(mb, i)
+                if bt is not None:
+                    # Broadcast Style Header
+                    total_runs = bt['runs_batter'].sum() # Assuming extras logic is handled or added here
+                    total_wickets = bl['W'].sum()
+                    
+                    st.markdown(f"""
+                    <div style="background: #1e293b; padding: 15px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 20px;">
+                        <h3 style="margin:0; color:#38bdf8;">{team_map[i]} <span style="color:white;">{total_runs}/{total_wickets}</span></h3>
+                        <p style="margin:0; color:#94a3b8; font-size:0.9rem;">Innings {i} Summary</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    c1, c2 = st.columns([1.2, 0.8]) # Adjusted widths for broadcast look
+                    with c1:
+                        st.markdown("#### 🏏 Batting")
+                        st.dataframe(bt, use_container_width=True, hide_index=True)
+                    with c2:
+                        st.markdown("#### ⚾ Bowling")
+                        st.dataframe(bl, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"No data available for {team_map[i]}")
 
         if not mb.empty:
             st.markdown("### Performance Charts")
             chart_col1, chart_col2 = st.columns(2)
+            # ... (Rest of your chart logic remains here)
             
             # 1. Match Progression (Worm)
             with chart_col1:
@@ -964,6 +968,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

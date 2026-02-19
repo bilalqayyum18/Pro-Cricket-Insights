@@ -74,10 +74,6 @@ if 'auth_view' not in st.session_state:
 # --- PERSIST AUTH CONTEXT ---
 if st.session_state.access_token and supabase:
     supabase.postgrest.auth(st.session_state.access_token)
-# Around line 140, update this:
-if st.session_state.user:
-    # Always refresh the client with the current session token
-    supabase = get_supabase_client(st.session_state.auth_session)
 
 # --- VALIDATION LOGIC ---
 def validate_identifier(identifier):
@@ -878,6 +874,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

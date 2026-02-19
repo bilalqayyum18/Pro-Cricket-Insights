@@ -10,6 +10,11 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 from xgboost import XGBClassifier
 
+# --- 1. INITIALIZE PAGE VARIABLE FIRST ---
+# This prevents the NameError if data loading takes time or fails
+if "page_nav" not in st.session_state:
+    st.session_state.page_nav = "Season Dashboard"
+
 # --- HELPERS ---
 def extract_data(resp):
     """Safely extract data from Supabase response regardless of return type."""
@@ -934,5 +939,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 

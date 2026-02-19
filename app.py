@@ -851,9 +851,9 @@ elif page == "Season Dashboard":
         st.subheader("Top Performers")
         c1, c2 = st.columns(2)
         if not bat.empty:
-            c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
+            c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark",labels={"runs_batter": "Total Runs"} ), use_container_width=True)
         if not bowl.empty:
-            c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark"), use_container_width=True)
+            c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark", labels={"wickets": "Total Wickets"}), use_container_width=True)
         if not mvp.empty:
             st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark"), use_container_width=True)
     else:
@@ -968,6 +968,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

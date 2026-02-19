@@ -137,17 +137,15 @@ def load_data():
         matches['date'] = pd.to_datetime(matches['date'])
         matches['venue'] = matches['venue'].str.split(',').str[0]
         
-        # Schema uses 'over' and 'ball' columns already. No mapping needed unless missing.
         if 'venue' not in balls.columns:
             venue_map = matches.set_index('match_id')['venue'].to_dict()
             balls['venue'] = balls['match_id'].map(venue_map)
 
         # Mapping schema names: runs_extras, wide, noball, bye, legbye
         if 'extra_runs' not in balls.columns:
-            # Schema uses runs_extras directly, but we ensure wide/noball logic for balls faced
             balls['extra_runs'] = pd.to_numeric(balls['runs_extras'], errors='coerce').fillna(0)
 
-        # Ensure numeric types for all analytical columns
+        # Ensure numeric types for all analytical columns as per schema
         numeric_cols = ['runs_batter', 'runs_total', 'wide', 'noball', 'bye', 'legbye', 'is_wicket']
         for col in numeric_cols:
             if col in balls.columns:
@@ -242,7 +240,6 @@ def train_ml_model(df):
 # --- ANALYTICS ENGINES (ADAPTED TO SCHEMA) ---
 def get_batting_stats(df):
     if df.empty: return pd.DataFrame()
-    # Logic: balls faced excludes wides (noballs are counted as balls faced in most formats/stats)
     bat = df.groupby('batter').agg({'runs_batter': 'sum', 'ball': 'count', 'wide': 'sum', 'match_id': 'nunique', 'is_wicket': 'sum'}).reset_index()
     bat['balls_faced'] = bat['ball'] - bat['wide']
     bat['strike_rate'] = (bat['runs_batter'] / (bat['balls_faced'].replace(0, 1)) * 100).round(2)
@@ -255,14 +252,11 @@ def get_batting_stats(df):
 
 def get_bowling_stats(df):
     if df.empty: return pd.DataFrame()
-    # Filter for wickets credited to bowlers
     bw = df[~df['wicket_kind'].isin(['run out', 'retired hurt', 'obstructing the field'])]
     wickets = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket': 'wickets'})
     df_c = df.copy()
-    # Runs conceded: Batter runs + Wides + NoBalls (Byes/LegByes not credited to bowler)
     df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + df_c['noball']
     runs = df_c.groupby('bowler')['rc'].sum().reset_index()
-    # Legal balls for economy
     bls = df_c[(df_c['wide'] == 0) & (df_c['noball'] == 0)].groupby('bowler').size().reset_index(name='balls')
     bowling = wickets.merge(runs, on='bowler').merge(bls, on='bowler')
     bowling['economy'] = (bowling['rc'] / (bowling['balls'].replace(0, 1) / 6)).round(2)
@@ -304,7 +298,6 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
             identifier = st.text_input("Email / Mobile / Landline", help="Supports 03xx (11 digits) or 051 (10 digits)")
             password = st.text_input("Password", type="password")
             
-            # Form button columns
             col_login, col_pro = st.columns(2)
             
             with col_login:
@@ -313,27 +306,19 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                         if supabase:
                             try:
                                 res = supabase.auth.sign_in_with_password({"email": identifier, "password": password})
-                                
                                 if res.session: 
                                     st.session_state.user = res.user
                                     st.session_state.access_token = res.session.access_token
                                     supabase.postgrest.auth(res.session.access_token)
-                                    
-                                    # Fetch Pro Status
                                     try:
                                         profile_res = supabase.table("profiles").select("is_pro").eq("id", res.user.id).execute()
                                         if profile_res.data and len(profile_res.data) > 0:
                                             st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
                                         else:
-                                            supabase.table("profiles").insert({
-                                                "id": res.user.id,
-                                                "identifier": identifier,
-                                                "is_pro": False
-                                            }).execute()
+                                            supabase.table("profiles").insert({"id": res.user.id, "identifier": identifier, "is_pro": False}).execute()
                                             st.session_state.is_pro = False
                                     except Exception:
                                         st.session_state.is_pro = False
-                                    
                                     st.success("Logged in successfully!")
                                     st.rerun()
                                 else:
@@ -357,13 +342,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
                 if validate_email(e) and validate_phone(m):
                     if supabase:
                         try:
-                            res = supabase.auth.sign_up({
-                                "email": e, 
-                                "password": p, 
-                                "options": {
-                                    "data": {"phone_number": m}
-                                }
-                            })
+                            res = supabase.auth.sign_up({"email": e, "password": p, "options": {"data": {"phone_number": m}}})
                             st.success("Registration initiated.")
                             st.info("Check your email for confirmation link.")
                             st.session_state.auth_view = "login"
@@ -377,8 +356,7 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
         if st.session_state.is_pro:
             st.write("⭐ **PRO ACCOUNT ACTIVE**")
         if st.button("Logout"): 
-            if supabase:
-                supabase.auth.sign_out()
+            if supabase: supabase.auth.sign_out()
             st.session_state.user = None
             st.session_state.access_token = None
             st.session_state.is_pro = False
@@ -425,7 +403,6 @@ if page == "Match Center":
 
         if not mb.empty:
             mb_c = mb.copy()
-            # Schema: runs_total column exists
             worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
             fig_worm = px.line(worm, x='over', y='runs_total', color='innings', 
                                title="Match Progression", template="plotly_dark",
@@ -440,7 +417,6 @@ elif page == "Pro Prediction":
     else:
         user_id = st.session_state.user.id
         can_predict, usage_left = True, 3
-        
         if supabase:
             try:
                 profile_res = supabase.table("profiles").select("is_pro").eq("id", user_id).execute()
@@ -448,32 +424,21 @@ elif page == "Pro Prediction":
                     st.session_state.is_pro = profile_res.data[0].get('is_pro', False)
 
                 time_threshold = (datetime.now() - timedelta(hours=24)).isoformat()
-                usage_res = supabase.table("prediction_attempts")\
-                    .select("id", count="exact")\
-                    .eq("user_id", user_id)\
-                    .gt("created_at", time_threshold)\
-                    .execute()
-                
+                usage_res = supabase.table("prediction_attempts").select("id", count="exact").eq("user_id", user_id).gt("created_at", time_threshold).execute()
                 attempts_count = usage_res.count if usage_res.count is not None else 0
                 usage_left = max(0, 3 - attempts_count)
-                
-                if not st.session_state.is_pro and attempts_count >= 3:
-                    can_predict = False
-
+                if not st.session_state.is_pro and attempts_count >= 3: can_predict = False
                 if st.session_state.is_pro:
                     can_predict = True
                     usage_left = "Unlimited"
-
             except Exception as e:
                 st.sidebar.error(f"Read Error: {e}")
 
         if not can_predict:
             st.error("Account Limit Reached. Upgrade to PRO for unlimited access.")
         else:
-            if st.session_state.is_pro:
-                st.success(f"Welcome! Unlimited Simulations Active.")
-            else:
-                st.info(f"Welcome! {usage_left} Simulations Remaining.")
+            if st.session_state.is_pro: st.success(f"Welcome! Unlimited Simulations Active.")
+            else: st.info(f"Welcome! {usage_left} Simulations Remaining.")
             
             with st.spinner("Initializing AI model..."):
                 model, le_t, le_v, le_d = train_ml_model(matches_df)
@@ -481,25 +446,16 @@ elif page == "Pro Prediction":
             with st.container():
                 st.markdown("<div class='premium-box'>", unsafe_allow_html=True)
                 col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    team1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
-                with col2:
-                    team2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != team1])
-                with col3:
-                    venue = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
-                with col4:
-                    toss_winner = st.selectbox("Toss Winner", [team1, team2])
-                    
+                with col1: team1 = st.selectbox("Team 1 (Bat First)", sorted(matches_df['team1'].unique()))
+                with col2: team2 = st.selectbox("Team 2 (Chase)", [t for t in sorted(matches_df['team2'].unique()) if t != team1])
+                with col3: venue = st.selectbox("Venue / Stadium", sorted(matches_df['venue'].unique()))
+                with col4: toss_winner = st.selectbox("Toss Winner", [team1, team2])
                 toss_decision = st.radio("Toss Decision", sorted(matches_df['toss_decision'].unique()), horizontal=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             if st.button("PREDICT MATCH WINNER", use_container_width=True):
                 if supabase:
-                    try:
-                        supabase.table("prediction_attempts").insert({
-                            "user_id": user_id,
-                            "metadata": {"team1": team1, "team2": team2, "venue": venue}
-                        }).execute()
+                    try: supabase.table("prediction_attempts").insert({"user_id": user_id, "metadata": {"team1": team1, "team2": team2, "venue": venue}}).execute()
                     except: pass
 
                 with st.spinner("Analyzing Historical Variables..."):
@@ -522,8 +478,7 @@ elif page == "Pro Prediction":
                     })
                     
                     probs = model.predict_proba(input_data)[0]
-                    t1_prob = f"{probs[1] * 100:.2f}"
-                    t2_prob = f"{(1 - probs[1]) * 100:.2f}"
+                    t1_prob, t2_prob = f"{probs[1] * 100:.2f}", f"{(1 - probs[1]) * 100:.2f}"
                     
                     st.markdown("### AI Predicted Probability")
                     res1, res2 = st.columns(2)
@@ -534,29 +489,21 @@ elif page == "Season Dashboard":
     season = st.selectbox("Select Season", sorted(matches_df['season'].unique(), reverse=True))
     st.title(f"Tournament Summary: {season}")
     s_balls = balls_df[balls_df['season'] == season]
-    
     if not s_balls.empty:
         bat, bowl = get_batting_stats(s_balls), get_bowling_stats(s_balls)
-        
         mvp = s_balls.groupby('batter').agg({'runs_batter': 'sum', 'is_wicket': 'sum'}).reset_index()
         mvp['score'] = (mvp['runs_batter'] * 1) + (mvp['is_wicket'] * 25)
         mvp = mvp.sort_values('score', ascending=False).head(10)
-
         m1, m2, m3 = st.columns(3)
         if not bat.empty: m1.metric("Orange Cap", bat.iloc[0]['batter'], f"{int(bat.iloc[0]['runs_batter'])} Runs")
         if not bowl.empty: m2.metric("Purple Cap", bowl.iloc[0]['bowler'], f"{int(bowl.iloc[0]['wickets'])} Wickets")
         if not mvp.empty: m3.metric("Top MVP", mvp.iloc[0]['batter'], f"{int(mvp.iloc[0]['score'])} Pts")
-
         st.subheader("Top Performers")
         c1, c2 = st.columns(2)
-        if not bat.empty:
-            c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
-        if not bowl.empty:
-            c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark"), use_container_width=True)
-        if not mvp.empty:
-            st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark"), use_container_width=True)
-    else:
-        st.warning(f"No match data found for season {season}")
+        if not bat.empty: c1.plotly_chart(px.bar(bat.head(10), x='batter', y='runs_batter', title="Top 10 Batters", template="plotly_dark"), use_container_width=True)
+        if not bowl.empty: c2.plotly_chart(px.bar(bowl.head(10), x='bowler', y='wickets', title="Top 10 Bowlers", template="plotly_dark"), use_container_width=True)
+        if not mvp.empty: st.plotly_chart(px.bar(mvp, x='batter', y='score', title="Top 10 MVP Impact", template="plotly_dark"), use_container_width=True)
+    else: st.warning(f"No match data found for season {season}")
 
 elif page == "Fantasy Scout":
     st.title("Fantasy Team Optimizer")
@@ -611,10 +558,8 @@ elif page == "Venue Analysis":
     vm = matches_df[matches_df['venue'] == v]
     st.metric("Matches Hosted", int(len(vm)))
     st.metric("Defend Wins", int(len(vm[vm['win_by'] == 'runs'])))
-    
     v_balls = balls_df[balls_df['venue'] == v]
     if not v_balls.empty:
-        # Schema uses runs_batter
         avg_score = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()
         st.metric("Avg 1st Innings", int(avg_score) if not np.isnan(avg_score) else 0)
 

@@ -658,12 +658,22 @@ elif page == "Pro Prediction":
                 if st.button("PREDICT MATCH WINNER", use_container_width=True):
                     if supabase:
                         try:
+                            # 1. Log the individual attempt (This is working for you now)
                             supabase.table("prediction_attempts").insert({
                                 "user_id": user_id,
                                 "metadata": {"team1": team1, "team2": team2, "venue": venue}
                             }).execute()
-                        except:
-                            pass
+
+                            # 2. Update or Create the summary log (The missing piece)
+                            # We use an upsert to increment usage or set the initial record
+                            supabase.rpc('increment_prediction_log', {
+                                'target_user_id': user_id,
+                                'target_identifier': st.session_state.user.email,
+                                'target_is_pro': st.session_state.is_pro
+                            }).execute()
+                            
+                        except Exception as e:
+                            st.sidebar.error(f"Logging failed: {e}")
                     
                     with st.spinner("Analyzing Historical Variables..."):
                         h2h_matches = matches_df[((matches_df['team1'] == team1) & (matches_df['team2'] == team2)) | ((matches_df['team1'] == team2) & (matches_df['team2'] == team1))]
@@ -814,5 +824,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 

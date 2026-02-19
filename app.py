@@ -317,10 +317,11 @@ def load_data():
 
 # Initialize data
 # Update this line to catch the 3rd item (all_players) returned by the function
-matches_df, balls_df, all_players = load_data()
-# Ensure these lines are at the end of your load_data() function
 all_players = sorted(list(set(balls['batter'].unique()) | set(balls['bowler'].unique())))
 return matches, balls, all_players
+matches_df, balls_df, all_players = load_data()
+# Ensure these lines are at the end of your load_data() function
+
 
 # --- ML MODEL ENGINE ---
 @st.cache_resource
@@ -900,6 +901,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

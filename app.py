@@ -252,28 +252,62 @@ def load_data():
             st.stop()
 
         # STANDARDIZATION & TIMESTAMP SYNC
+        # --- STANDARDIZATION & TIMESTAMP SYNC ---
         for df in [matches, balls]:
             df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').astype('Int64')
+            # coerce seasons to Int64 so comparisons work reliably
             df['season'] = pd.to_numeric(df.get('season'), errors='coerce').astype('Int64')
 
-        # Use new canonical timestamps from Supabase (Option A)
-        # matches.date_ts and ball_by_ball.match_date_ts
-        matches['date'] = pd.to_datetime(matches.get('date_ts').fillna(matches.get('date')), errors='coerce')
-        balls['date'] = pd.to_datetime(balls.get('match_date_ts').fillna(balls.get('date')), errors='coerce')
+        # Use canonical timestamps from Supabase if available, fallback to existing date text
+        # Parse with UTC to avoid timezone-naive / timezone-aware mismatches
+        matches['date'] = pd.to_datetime(
+            matches.get('date_ts').where(matches.get('date_ts').notna(), matches.get('date')),
+            utc=True,
+            errors='coerce'
+        )
+        balls['date'] = pd.to_datetime(
+            balls.get('match_date_ts').where(balls.get('match_date_ts').notna(), balls.get('date')),
+            utc=True,
+            errors='coerce'
+        )
 
-        # Clean Venue names
-        matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
+        # If date parsing produced NaT for many rows, attempt a secondary parse of date text (common formats)
+        if matches['date'].isna().sum() > 0:
+            # try common textual formats
+            matches['date'] = matches['date'].fillna(
+                pd.to_datetime(matches.get('date'), format='%Y-%m-%d', utc=True, errors='coerce')
+            ).fillna(
+                pd.to_datetime(matches.get('date'), format='%d-%m-%Y', utc=True, errors='coerce')
+            ).fillna(
+                pd.to_datetime(matches.get('date'), format='%d/%m/%Y', utc=True, errors='coerce')
+            )
 
-        # Standardize Numeric Ball Data
-        numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
-        for col in numeric_cols:
-            if col in balls.columns:
-                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
+        if balls['date'].isna().sum() > 0:
+            balls['date'] = balls['date'].fillna(
+                pd.to_datetime(balls.get('date'), format='%Y-%m-%d', utc=True, errors='coerce')
+            ).fillna(
+                pd.to_datetime(balls.get('date'), format='%d-%m-%Y', utc=True, errors='coerce')
+            ).fillna(
+                pd.to_datetime(balls.get('date'), format='%d/%m/%Y', utc=True, errors='coerce')
+            )
 
-        # Map Venue into balls for Venue Analysis
+        # As a final fallback, if date still missing but season present, set to season start (non-destructive)
+        matches.loc[matches['date'].isna() & matches['season'].notna(), 'date'] = matches.loc[matches['date'].isna() & matches['season'].notna(), 'season'].apply(lambda s: pd.Timestamp(year=int(s), month=1, day=1, tz='UTC'))
+        balls.loc[balls['date'].isna() & balls['season'].notna(), 'date'] = balls.loc[balls['date'].isna() & balls['season'].notna(), 'season'].apply(lambda s: pd.Timestamp(year=int(s), month=1, day=1, tz='UTC'))
+
+        # Normalize venue
+        matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0].str.strip()
+        # propagate venue to balls via match_id
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
+        # Standardize numeric ball columns
+        numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
+        for col in numeric_cols:
+            if col in balls.columns:
+                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0).astype(int)
+
+        # Normalize text fields
         text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
         for c in text_cols:
             if c in balls.columns:
@@ -281,6 +315,12 @@ def load_data():
                 if c == "wicket_kind":
                     balls[c] = balls[c].replace({"": None})
                     balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
+
+        # Debug/info: expose counts so you can see if anything remains missing
+        st.sidebar.info(f"Matches: {len(matches)} rows — date nulls: {matches['date'].isna().sum()} — seasons: {sorted(matches['season'].dropna().unique())}")
+        st.sidebar.info(f"Balls: {len(balls)} rows — date nulls: {balls['date'].isna().sum()} — seasons: {sorted(balls['season'].dropna().unique())}")
+
+        return matches, balls
 
         unmapped_v = balls[balls['venue'] == "Unknown Venue"].shape[0]
         if unmapped_v > 0:
@@ -794,6 +834,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

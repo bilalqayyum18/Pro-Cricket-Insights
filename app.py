@@ -310,15 +310,15 @@ def load_data():
         if unmapped_v > 0:
             st.sidebar.info(f"ℹ️ {unmapped_v} balls are missing match details.")
 
-        return matches, balls
+        all_players = sorted(list(set(balls['batter'].unique()) | set(balls['bowler'].unique())))
+        return matches, balls, all_player
     except Exception as e:
         st.error(f"Data process failed: {e}")
         st.stop()
 
 # Initialize data
 # Update this line to catch the 3rd item (all_players) returned by the function
-all_players = sorted(list(set(balls['batter'].unique()) | set(balls['bowler'].unique())))
-return matches, balls, all_players
+s
 matches_df, balls_df, all_players = load_data()
 # Ensure these lines are at the end of your load_data() function
 
@@ -901,6 +901,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

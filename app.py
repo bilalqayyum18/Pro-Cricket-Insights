@@ -641,20 +641,11 @@ if page == "Match Center":
             st.markdown("### Performance Charts")
             chart_col1, chart_col2 = st.columns(2)
             
-            # Prepare Team Name Mapping for Charts
-            team_map = {}
-            for inn in [1, 2]:
-                team_name = mb[mb['innings'] == inn]['batting_team'].unique()
-                if len(team_name) > 0:
-                    team_map[inn] = team_name[0]
-                else:
-                    team_map[inn] = f"Innings {inn}"
-
-            # 1. Match Progression (Worm)
+            #1. Match Progression (Worm)
             with chart_col1:
                 mb_c = mb.copy()
                 worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
-                # Map innings number to team name
+                # FIX: Map innings number to team name for the legend and color
                 worm['Team'] = worm['innings'].map(team_map)
                 
                 fig_worm = px.line(worm, x='over', y='runs_total', color='Team', 
@@ -668,7 +659,7 @@ if page == "Match Center":
                 # Calculate RPO for each over
                 mb_rr['over_runs'] = mb_rr.groupby(['innings', 'over'])['runs_total'].transform('sum')
                 rr_df = mb_rr[['innings', 'over', 'over_runs']].drop_duplicates()
-                # Map innings number to team name
+                # FIX: Map innings number to team name for the legend and color
                 rr_df['Team'] = rr_df['innings'].map(team_map)
         
                 fig_rr = px.bar(rr_df, x='over', y='over_runs', color='Team', 
@@ -960,3 +951,4 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+

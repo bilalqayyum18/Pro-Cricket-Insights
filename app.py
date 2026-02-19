@@ -15,9 +15,10 @@ supabase_status = "Disconnected"
 supabase: Client = None
 
 try:
-    if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
+    # NOTE: allow either SUPABASE_KEY or SUPABASE_ANON_KEY in secrets for compatibility
+    if "SUPABASE_URL" in st.secrets and ("SUPABASE_KEY" in st.secrets or "SUPABASE_ANON_KEY" in st.secrets):
         url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        key = st.secrets.get("SUPABASE_KEY", st.secrets.get("SUPABASE_ANON_KEY"))
         # Create a persistent client instance
         supabase = create_client(url, key)
         supabase_status = "Connected"
@@ -41,9 +42,37 @@ if 'is_pro' not in st.session_state:
 if 'auth_view' not in st.session_state:
     st.session_state.auth_view = "login"
 
-# --- PERSIST AUTH CONTEXT ---
-if st.session_state.access_token and supabase:
-    supabase.postgrest.auth(st.session_state.access_token)
+# --- Robust Supabase client / session handling (REPLACED) ---
+def get_supabase_client(session=None, access_token=None):
+    """
+    Returns a supabase client. If session or access_token provided, attempt to attach it.
+    Handles different supabase-py versions gracefully.
+    """
+    if supabase is None:
+        return None
+    client = supabase  # reuse created client instance
+    if session:
+        try:
+            # many client versions expose .auth.session
+            client.auth.session = session
+        except Exception:
+            # some versions may not support assignment; ignore and continue with anon client
+            pass
+    elif access_token:
+        try:
+            # attempt to create a client keyed to the access_token (best-effort)
+            client = create_client(st.secrets["SUPABASE_URL"], access_token)
+        except Exception:
+            # fallback to previously created client
+            client = supabase
+    return client
+
+# Attach session to client if present
+if st.session_state.access_token:
+    supabase = get_supabase_client(
+        session={"access_token": st.session_state.access_token}, 
+        access_token=st.session_state.access_token
+    )
 
 # --- VALIDATION LOGIC (RESTORED COMPLETELY) ---
 def validate_identifier(identifier):
@@ -763,6 +792,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

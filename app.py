@@ -251,19 +251,26 @@ def load_data():
             st.error("Ball_by_ball table is empty.")
             st.stop()
 
-        # STANDARDIZATION
+        # STANDARDIZATION & TIMESTAMP SYNC
         for df in [matches, balls]:
             df['match_id'] = pd.to_numeric(df['match_id'], errors='coerce').astype('Int64')
             df['season'] = pd.to_numeric(df.get('season'), errors='coerce').astype('Int64')
 
-        matches['date'] = pd.to_datetime(matches.get('date'), errors='coerce')
+        # Use new canonical timestamps from Supabase (Option A)
+        # matches.date_ts and ball_by_ball.match_date_ts
+        matches['date'] = pd.to_datetime(matches.get('date_ts').fillna(matches.get('date')), errors='coerce')
+        balls['date'] = pd.to_datetime(balls.get('match_date_ts').fillna(balls.get('date')), errors='coerce')
+
+        # Clean Venue names
         matches['venue'] = matches.get('venue', '').astype(str).str.split(',').str[0]
 
+        # Standardize Numeric Ball Data
         numeric_cols = ['runs_batter', 'runs_extras', 'runs_total', 'wide', 'noball', 'is_wicket', 'innings', 'over', 'ball']
         for col in numeric_cols:
             if col in balls.columns:
                 balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
+        # Map Venue into balls for Venue Analysis
         venue_map = matches.set_index('match_id')['venue'].to_dict()
         balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
 
@@ -787,6 +794,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

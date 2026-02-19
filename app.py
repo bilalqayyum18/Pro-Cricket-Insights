@@ -293,9 +293,9 @@ def load_data():
                     balls[c] = balls[c].replace({"": None})
                     balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
                     
-        # Map venue into balls
+        # Map venue into balls with a fallback for missing data
         venue_map = matches.set_index('match_id')['venue'].to_dict()
-        balls['venue'] = balls['match_id'].map(venue_map)
+        balls['venue'] = balls['match_id'].map(venue_map).fillna("Unknown Venue")
         
         # Ensure types are consistent
         matches['match_id'] = matches['match_id'].astype('Int64')
@@ -303,7 +303,15 @@ def load_data():
         
         if 'date' in matches.columns:
             matches['date'] = pd.to_datetime(matches['date'], errors='coerce').dt.date
+
+        # --- DATA SANITY CHECKS ---
+        missing_match_ids = matches['match_id'].isna().sum()
+        if missing_match_ids > 0:
+            st.sidebar.warning(f"⚠️ {missing_match_ids} matches have invalid IDs.")
             
+        unmapped_venues = balls[balls['venue'] == "Unknown Venue"].shape[0]
+        if unmapped_venues > 0:
+            st.sidebar.info(f"ℹ️ {unmapped_venues} balls could not be mapped to a venue.")
         return matches, balls
         
     except Exception as e:
@@ -536,7 +544,7 @@ if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
-    ms = ml.apply(lambda x: f"{x['team1']} vs {x['team2']} ({x['date'].strftime('%Y-%m-%d')})", axis=1)
+    ms = ml.apply(lambda x: f"{x['team1']} vs {x['team2']} ({x['date'].strftime('%Y-%m-%d') if pd.notnull(x.get('date')) else 'Unknown Date'})", axis=1)
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
         idx = ms.tolist().index(sel)
@@ -716,7 +724,8 @@ elif page == "Fantasy Scout":
     if not sf_balls.empty:
         b, w = get_batting_stats(sf_balls), get_bowling_stats(sf_balls)
         fan = b.merge(w, left_on='batter', right_on='bowler', how='outer').fillna(0)
-        fan['p_name'] = fan['batter'].where(fan['batter']!=0, fan['bowler'])
+        # Fix: Properly check for empty or null strings instead of 0
+        fan['p_name'] = fan['batter'].where((fan['batter'] != 0) & (fan['batter'] != ""), fan['bowler'])
         fan['pts'] = (fan['runs_batter']*1) + (fan['wickets']*25)
         fig_fan = px.bar(fan.sort_values('pts', ascending=False).head(11), x='pts', y='p_name', orientation='h', title="Fantasy Impact Ranking", template="plotly_dark")
         st.plotly_chart(fig_fan, use_container_width=True)
@@ -762,7 +771,9 @@ elif page == "Player Comparison":
 
 elif page == "Venue Analysis":
     st.title("Venue Intelligence")
-    v = st.selectbox("Select Venue", sorted(matches_df['venue'].unique()))
+    # Filter out empty or null venues for the selector
+    valid_venues = [v for v in matches_df['venue'].unique() if v and str(v).lower() != 'nan' and str(v).strip() != '']
+    v = st.selectbox("Select Venue", sorted(valid_venues))
     vm = matches_df[matches_df['venue'] == v]
     st.metric("Matches Hosted", int(len(vm)))
     st.metric("Defend Wins", int(len(vm[vm['win_by'] == 'runs'])))
@@ -794,4 +805,5 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 

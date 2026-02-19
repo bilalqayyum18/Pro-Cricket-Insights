@@ -182,14 +182,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DATA LOADING (MIGRATED TO SUPABASE) ---
+# --- HELPER FOR TEXT NORMALIZATION ---
+def normalize_text_series(series):
+    """Helper to safely normalize text columns for consistency"""
+    return series.astype(str).str.lower().str.strip().replace({'nan': '', 'none': ''})
+
+# --- DATA LOADING (MIGRATED TO SUPABASE) ---
 @st.cache_data(ttl=3600)
 def load_data():
     if supabase_status != "Connected":
         st.error(f"Supabase Connection Failed: {supabase_status}")
         st.stop()
     
-    client = get_supabase_client(session=None, access_token=st.session_state.get("access_token"))
-    if client is None:
+    # Use the global 'supabase' client already initialized at the top
+    if supabase is None:
         st.error("Supabase client not available")
         st.stop()
         
@@ -197,7 +203,7 @@ def load_data():
         # ----------------------------
         # FETCH MATCHES (defensive)
         # ----------------------------
-        matches_res = client.table("matches").select("*").execute()
+        matches_res = supabase.table("matches").select("*").execute()
         # support both dict-like and object responses
         matches_data = getattr(matches_res, "data", matches_res.get("data", None)) if matches_res else None
         matches = pd.DataFrame(matches_data if matches_data else [])
@@ -213,7 +219,7 @@ def load_data():
         batch_size = 10000
         start = 0
         while True:
-            response = client.table("ball_by_ball") \
+            response = supabase.table("ball_by_ball") \
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
@@ -763,6 +769,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

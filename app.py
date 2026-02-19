@@ -12,11 +12,13 @@ from xgboost import XGBClassifier
 
 # --- HELPERS ---
 def extract_data(resp):
-    """Safely extract data from Supabase response without triggering AttributeError."""
+    """Safely extract data from Supabase response regardless of return type."""
     if resp is None:
         return None
+    # Prefer .data attribute for APIResponse objects
     if hasattr(resp, "data"):
         return resp.data
+    # Use .get() ONLY if it's a dictionary
     if isinstance(resp, dict):
         return resp.get("data")
     return None
@@ -240,7 +242,10 @@ def load_data():
                 .select("*") \
                 .range(start, start + batch_size - 1) \
                 .execute()
+            
+            # Use the helper instead of direct .get()
             batch = extract_data(response)
+            
             if not batch:
                 break
             all_balls.extend(batch)
@@ -592,7 +597,9 @@ elif page == "Pro Prediction":
                     .eq("user_id", user_id)\
                     .gt("created_at", time_threshold)\
                     .execute()
-                attempts_count = usage_res.count if hasattr(usage_res, 'count') and usage_res.count is not None else 0
+                
+                # APIResponse has a .count attribute, not a .get() method
+                attempts_count = getattr(usage_res, 'count', 0) or 0
                 usage_left = max(0, 3 - attempts_count)
                 
                 if not st.session_state.is_pro and attempts_count >= 3:
@@ -787,3 +794,4 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+

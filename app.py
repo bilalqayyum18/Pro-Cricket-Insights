@@ -182,413 +182,108 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- DATA LOADING (MIGRATED TO SUPABASE) ---
-@st.cache_data(
-ttl=
-3600
-)
-
-def
- 
-load_data
-():
-
-    
-if
- supabase_status != 
-"Connected"
-:
-        st.error(
-f"Supabase Connection Failed: 
-{supabase_status}
-"
-)
+@st.cache_data(ttl=3600)
+def load_data():
+    if supabase_status != "Connected":
+        st.error(f"Supabase Connection Failed: {supabase_status}")
         st.stop()
-    client = get_supabase_client(session=
-None
-, access_token=st.session_state.get(
-"access_token"
-))
     
-if
- client 
-is
- 
-None
-:
-        st.error(
-"Supabase client not available"
-)
+    client = get_supabase_client(session=None, access_token=st.session_state.get("access_token"))
+    if client is None:
+        st.error("Supabase client not available")
         st.stop()
-
-    
-try
-:
         
-# ----------------------------
-
+    try:
+        # ----------------------------
+        # FETCH MATCHES (defensive)
+        # ----------------------------
+        matches_res = client.table("matches").select("*").execute()
+        # support both dict-like and object responses
+        matches_data = getattr(matches_res, "data", matches_res.get("data", None)) if matches_res else None
+        matches = pd.DataFrame(matches_data if matches_data else [])
         
-# FETCH MATCHES (defensive)
-
-        
-# ----------------------------
-
-        matches_res = client.table(
-"matches"
-).select(
-"*"
-).execute()
-        
-# support both dict-like and object responses
-
-        matches_data = 
-getattr
-(matches_res, 
-"data"
-, matches_res.get(
-"data"
-, 
-None
-)) 
-if
- matches_res 
-else
- 
-None
-
-        matches = pd.DataFrame(matches_data 
-if
- matches_data 
-else
- [])
-        
-if
- matches.empty:
-            st.error(
-"Matches table is empty."
-)
+        if matches.empty:
+            st.error("Matches table is empty.")
             st.stop()
-
-        
-# ----------------------------
-
-        
-# FETCH BALL BY BALL IN BATCHES (defensive)
-
-        
-# ----------------------------
-
+            
+        # ----------------------------
+        # FETCH BALL BY BALL IN BATCHES (defensive)
+        # ----------------------------
         all_balls = []
-        batch_size = 
-10000
-
-        start = 
-0
-
-        
-while
- 
-True
-:
-            response = client.table(
-"ball_by_ball"
-) \
-                .select(
-"*"
-) \
-                .
-range
-(start, start + batch_size - 
-1
-) \
+        batch_size = 10000
+        start = 0
+        while True:
+            response = client.table("ball_by_ball") \
+                .select("*") \
+                .range(start, start + batch_size - 1) \
                 .execute()
-            batch = 
-getattr
-(response, 
-"data"
-, response.get(
-"data"
-, [])) 
-if
- response 
-else
- []
-            
-if
- 
-not
- batch:
-                
-break
-
+            batch = getattr(response, "data", response.get("data", [])) if response else []
+            if not batch:
+                break
             all_balls.extend(batch)
-            
-if
- 
-len
-(batch) < batch_size:
-                
-break
-
+            if len(batch) < batch_size:
+                break
             start += batch_size
+            
+        balls = pd.DataFrame(all_balls if all_balls else [])
         
-        balls = pd.DataFrame(all_balls 
-if
- all_balls 
-else
- [])
-        
-if
- balls.empty:
-            st.error(
-"Ball_by_ball table is empty."
-)
+        if balls.empty:
+            st.error("Ball_by_ball table is empty.")
             st.stop()
-
+            
+        # ----------------------------
+        # CLEAN MATCHES (defensive)
+        # ----------------------------
+        matches['match_id'] = pd.to_numeric(matches['match_id'], errors='coerce')
+        matches['season'] = pd.to_numeric(matches.get('season', pd.Series(dtype='float64')), errors='coerce')
+        matches['date'] = pd.to_datetime(matches.get('date', pd.Series(dtype='datetime64[ns]')), errors='coerce')
+        matches['venue'] = matches.get('venue', matches.get('ground', '')).astype(str).str.split(',').str[0]
         
-# ----------------------------
-
-        
-# CLEAN MATCHES (defensive)
-
-        
-# ----------------------------
-
-        matches[
-'match_id'
-] = pd.to_numeric(matches[
-'match_id'
-], errors=
-'coerce'
-)
-        matches[
-'season'
-] = pd.to_numeric(matches.get(
-'season'
-, pd.Series([])), errors=
-'coerce'
-)
-        matches[
-'date'
-] = pd.to_datetime(matches.get(
-'date'
-, pd.Series([])), errors=
-'coerce'
-)
-        matches[
-'venue'
-] = matches.get(
-'venue'
-, matches.get(
-'ground'
-, 
-''
-)).astype(
-str
-).
-str
-.split(
-','
-).
-str
-[
-0
-]
-
-        
-# ----------------------------
-
-        
-# CLEAN BALLS (defensive)
-
-        
-# ----------------------------
-
-        balls[
-'match_id'
-] = pd.to_numeric(balls.get(
-'match_id'
-, pd.Series([])), errors=
-'coerce'
-)
-        balls[
-'season'
-] = pd.to_numeric(balls.get(
-'season'
-, pd.Series([])), errors=
-'coerce'
-)
-        balls[
-'innings'
-] = pd.to_numeric(balls.get(
-'innings'
-, pd.Series([])), errors=
-'coerce'
-)
-        balls[
-'over'
-] = pd.to_numeric(balls.get(
-'over'
-, pd.Series([])), errors=
-'coerce'
-)
-        balls[
-'ball'
-] = pd.to_numeric(balls.get(
-'ball'
-, pd.Series([])), errors=
-'coerce'
-)
+        # ----------------------------
+        # CLEAN BALLS (defensive)
+        # ----------------------------
+        balls['match_id'] = pd.to_numeric(balls.get('match_id', pd.Series(dtype='float64')), errors='coerce')
+        balls['season'] = pd.to_numeric(balls.get('season', pd.Series(dtype='float64')), errors='coerce')
+        balls['innings'] = pd.to_numeric(balls.get('innings', pd.Series(dtype='float64')), errors='coerce')
+        balls['over'] = pd.to_numeric(balls.get('over', pd.Series(dtype='float64')), errors='coerce')
+        balls['ball'] = pd.to_numeric(balls.get('ball', pd.Series(dtype='float64')), errors='coerce')
         
         numeric_cols = [
-            
-'runs_batter'
-, 
-'runs_extras'
-, 
-'runs_total'
-, 
-'wide'
-, 
-            
-'noball'
-, 
-'bye'
-, 
-'legbye'
-, 
-'is_wicket'
-
+            'runs_batter', 'runs_extras', 'runs_total', 'wide', 
+            'noball', 'bye', 'legbye', 'is_wicket'
         ]
-        
-for
- col 
-in
- numeric_cols:
-            
-if
- col 
-in
- balls.columns:
-                balls[col] = pd.to_numeric(balls[col], errors=
-'coerce'
-).fillna(
-0
-)
-
-        
-# Normalize wicket_kind and other text fields
-
-        text_cols = [
-"wicket_kind"
-, 
-"batter"
-, 
-"bowler"
-, 
-"non_striker"
-, 
-"player_out"
-, 
-"fielders"
-, 
-"umpire1"
-, 
-"umpire2"
-]
-        
-for
- c 
-in
- text_cols:
-            
-if
- c 
-in
- balls.columns:
-                balls[c] = normalize_text_series(balls[c])
+        for col in numeric_cols:
+            if col in balls.columns:
+                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
                 
-if
- c == 
-"wicket_kind"
-:
-                    balls[c] = balls[c].replace({
-""
-: 
-None
-})
-                    balls[c] = balls[c].where(balls[c].isnull(), balls[c].
-str
-.lower().
-str
-.strip())
-
+        # Normalize wicket_kind and other text fields
+        text_cols = ["wicket_kind", "batter", "bowler", "non_striker", "player_out", "fielders", "umpire1", "umpire2"]
+        for c in text_cols:
+            if c in balls.columns:
+                balls[c] = normalize_text_series(balls[c])
+                if c == "wicket_kind":
+                    balls[c] = balls[c].replace({"": None})
+                    balls[c] = balls[c].where(balls[c].isnull(), balls[c].str.lower().str.strip())
+                    
+        # Map venue into balls
+        venue_map = matches.set_index('match_id')['venue'].to_dict()
+        balls['venue'] = balls['match_id'].map(venue_map)
         
-# Map venue into balls
-
-        venue_map = matches.set_index(
-'match_id'
-)[
-'venue'
-].to_dict()
-        balls[
-'venue'
-] = balls[
-'match_id'
-].
-map
-(venue_map)
-
+        # Ensure match_id types are consistent
+        matches['match_id'] = matches['match_id'].astype('Int64')
+        balls['match_id'] = balls['match_id'].astype('Int64')
         
-# Ensure match_id types are consistent
-
-        matches[
-'match_id'
-] = matches[
-'match_id'
-].astype(
-'Int64'
-)
-        balls[
-'match_id'
-] = balls[
-'match_id'
-].astype(
-'Int64'
-)
-
+        # Ensure date column in matches is a python date for display formatting
+        if 'date' in matches.columns:
+            matches['date'] = pd.to_datetime(matches['date'], errors='coerce').dt.date
+            
+        return matches, balls
         
-# Ensure date column in matches is a python date for display formatting
-
-        
-if
- 
-'date'
- 
-in
- matches.columns:
-            matches[
-'date'
-] = pd.to_datetime(matches[
-'date'
-], errors=
-'coerce'
-).dt.date
-
-        
-return
- matches, balls
-    
-except
- Exception 
-as
- e:
-        st.error(
-f"Supabase fetch failed: 
-{e}
-"
-)
+    except Exception as e:
+        st.error(f"Supabase fetch failed: {e}")
         st.stop()
 
+# Load the data into the dataframes
 matches_df, balls_df = load_data()
 
 # --- ML MODEL ENGINE (RESTORED COMPLETELY) ---
@@ -1068,5 +763,6 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 

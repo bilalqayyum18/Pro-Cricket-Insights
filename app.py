@@ -133,27 +133,25 @@ def load_data():
             st.error("Data fetched but tables appear empty in Supabase.")
             st.stop()
 
-        # Data Pre-processing (Preserving original logic)
+        # Data Pre-processing (Updated to Match Provided Schema)
         matches['date'] = pd.to_datetime(matches['date'])
         matches['venue'] = matches['venue'].str.split(',').str[0]
         
-        if 'over' not in balls.columns:
-            balls['over'] = balls['ball'].astype(int)
-        
+        # Schema uses 'over' and 'ball' columns already. No mapping needed unless missing.
         if 'venue' not in balls.columns:
             venue_map = matches.set_index('match_id')['venue'].to_dict()
             balls['venue'] = balls['match_id'].map(venue_map)
 
+        # Mapping schema names: runs_extras, wide, noball, bye, legbye
         if 'extra_runs' not in balls.columns:
-            w = balls['wide'] if 'wide' in balls.columns else 0
-            nb = balls['noball'] if 'noball' in balls.columns else 0
-            b = balls['byes'] if 'byes' in balls.columns else 0
-            lb = balls['legbyes'] if 'legbyes' in balls.columns else 0
-            balls['extra_runs'] = w + nb + b + lb
+            # Schema uses runs_extras directly, but we ensure wide/noball logic for balls faced
+            balls['extra_runs'] = pd.to_numeric(balls['runs_extras'], errors='coerce').fillna(0)
 
-        # Ensure numeric types
-        if 'runs_batter' in balls.columns:
-            balls['runs_batter'] = pd.to_numeric(balls['runs_batter'], errors='coerce').fillna(0)
+        # Ensure numeric types for all analytical columns
+        numeric_cols = ['runs_batter', 'runs_total', 'wide', 'noball', 'bye', 'legbye', 'is_wicket']
+        for col in numeric_cols:
+            if col in balls.columns:
+                balls[col] = pd.to_numeric(balls[col], errors='coerce').fillna(0)
 
         return matches, balls
 
@@ -241,9 +239,10 @@ def train_ml_model(df):
     return model, le_team, le_venue, le_decision
 
 
-# --- ANALYTICS ENGINES (RESTORED COMPLETELY) ---
+# --- ANALYTICS ENGINES (ADAPTED TO SCHEMA) ---
 def get_batting_stats(df):
     if df.empty: return pd.DataFrame()
+    # Logic: balls faced excludes wides (noballs are counted as balls faced in most formats/stats)
     bat = df.groupby('batter').agg({'runs_batter': 'sum', 'ball': 'count', 'wide': 'sum', 'match_id': 'nunique', 'is_wicket': 'sum'}).reset_index()
     bat['balls_faced'] = bat['ball'] - bat['wide']
     bat['strike_rate'] = (bat['runs_batter'] / (bat['balls_faced'].replace(0, 1)) * 100).round(2)
@@ -256,13 +255,15 @@ def get_batting_stats(df):
 
 def get_bowling_stats(df):
     if df.empty: return pd.DataFrame()
+    # Filter for wickets credited to bowlers
     bw = df[~df['wicket_kind'].isin(['run out', 'retired hurt', 'obstructing the field'])]
     wickets = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket': 'wickets'})
     df_c = df.copy()
-    nb = df_c['noball'] if 'noball' in df_c.columns else 0
-    df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + nb
+    # Runs conceded: Batter runs + Wides + NoBalls (Byes/LegByes not credited to bowler)
+    df_c['rc'] = df_c['runs_batter'] + df_c['wide'] + df_c['noball']
     runs = df_c.groupby('bowler')['rc'].sum().reset_index()
-    bls = df_c[(df_c['wide'] == 0) & (nb == 0)].groupby('bowler').size().reset_index(name='balls')
+    # Legal balls for economy
+    bls = df_c[(df_c['wide'] == 0) & (df_c['noball'] == 0)].groupby('bowler').size().reset_index(name='balls')
     bowling = wickets.merge(runs, on='bowler').merge(bls, on='bowler')
     bowling['economy'] = (bowling['rc'] / (bowling['balls'].replace(0, 1) / 6)).round(2)
     for col in ['wickets', 'rc', 'balls']:
@@ -282,10 +283,9 @@ def get_inning_scorecard(df, innings_no):
     
     bw = id_df[~id_df['wicket_kind'].isin(['run out', 'retired hurt'])]
     w = bw.groupby('bowler')['is_wicket'].sum().reset_index().rename(columns={'is_wicket':'W'})
-    nb = id_df['noball'] if 'noball' in id_df.columns else 0
-    id_df['rc_temp'] = id_df['runs_batter'] + id_df['wide'] + nb
+    id_df['rc_temp'] = id_df['runs_batter'] + id_df['wide'] + id_df['noball']
     r = id_df.groupby('bowler')['rc_temp'].sum().reset_index()
-    bls = id_df[(id_df['wide']==0) & (nb==0)].groupby('bowler').size().reset_index(name='bls')
+    bls = id_df[(id_df['wide']==0) & (id_df['noball']==0)].groupby('bowler').size().reset_index(name='bls')
     bowl = w.merge(r, on='bowler').merge(bls, on='bowler')
     bowl['O'] = ((bowl['bls']//6) + (bowl['bls']%6/10)).round(1)
     bowl['Econ'] = (bowl['rc_temp']/(bowl['bls'].replace(0,1)/6)).round(1)
@@ -425,11 +425,11 @@ if page == "Match Center":
 
         if not mb.empty:
             mb_c = mb.copy()
-            mb_c['runs_total_ball'] = mb_c['runs_batter'] + mb_c['extra_runs']
-            worm = mb_c.groupby(['innings', 'over'])['runs_total_ball'].sum().groupby(level=0).cumsum().reset_index()
-            fig_worm = px.line(worm, x='over', y='runs_total_ball', color='innings', 
+            # Schema: runs_total column exists
+            worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
+            fig_worm = px.line(worm, x='over', y='runs_total', color='innings', 
                                title="Match Progression", template="plotly_dark",
-                               labels={"over": "Overs", "runs_total_ball": "Runs", "innings": "Innings"})
+                               labels={"over": "Overs", "runs_total": "Runs", "innings": "Innings"})
             st.plotly_chart(fig_worm, use_container_width=True)
 
 elif page == "Pro Prediction":
@@ -614,6 +614,7 @@ elif page == "Venue Analysis":
     
     v_balls = balls_df[balls_df['venue'] == v]
     if not v_balls.empty:
+        # Schema uses runs_batter
         avg_score = v_balls[v_balls['innings']==1].groupby('match_id')['runs_batter'].sum().mean()
         st.metric("Avg 1st Innings", int(avg_score) if not np.isnan(avg_score) else 0)
 

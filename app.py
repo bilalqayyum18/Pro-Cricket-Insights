@@ -460,42 +460,40 @@ def get_inning_scorecard(df, innings_no):
     bowl['W'] = bowl['W'].astype(int); bowl['rc_temp'] = bowl['rc_temp'].astype(int)
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
 
-# --- NAVIGATION ---
+#NAVIGATION
 st.sidebar.title("Pakistan League Intelligence")
 
-# 1. Define the options list explicitly so we can find the index
+# Define options as a list so we can find indices for redirection
 nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"]
 
-# 2. Sync session state with the radio selection
+# Initialize page_nav state if it doesn't exist
 if "page_nav" not in st.session_state:
     st.session_state.page_nav = "Season Dashboard"
 
-# Find the index of the current page to keep the radio button in sync
+# Determine the index based on session state (this is what makes it switch)
 try:
-    default_index = nav_options.index(st.session_state.page_nav)
+    default_nav_index = nav_options.index(st.session_state.page_nav)
 except ValueError:
-    default_index = 0
+    default_nav_index = 0
 
-# 3. The Radio Button - Note the 'index' and 'key'
-page = st.sidebar.radio("Navigation", nav_options, index=default_index, key="navigation_radio")
+# Use the index and a key to keep the radio in sync
+page = st.sidebar.radio("Navigation", nav_options, index=default_nav_index, key="main_nav")
 
-# Update the state if the user clicks manually
+# Update the session state immediately when a user clicks manually
 st.session_state.page_nav = page
 
-# --- QUICK PLAYER LOOKUP ---
 st.sidebar.divider()
 search_query = st.sidebar.text_input("🔍 Quick Player Lookup")
-
 if search_query:
     found_players = [p for p in all_players if search_query.lower() in p.lower()]
     if found_players:
         selected_from_search = st.sidebar.selectbox("Matches found:", found_players)
         if st.sidebar.button("Go to Profile", use_container_width=True):
-            # 1. Set the override player for the Impact Players page
+            # 1. Set the player override
             st.session_state.selected_player_override = selected_from_search
-            # 2. Change the navigation state
-            st.session_state.page_nav = "Impact Players" 
-            # 3. Rerun to apply changes
+            # 2. Change the navigation state to the target page
+            st.session_state.page_nav = "Impact Players"
+            # 3. Rerun to force the radio button to move
             st.rerun()
             
 # --- AUTH / CONNECTION IN SIDEBAR ---
@@ -844,42 +842,53 @@ elif page == "Fantasy Scout":
 elif page == "Impact Players":
     st.title("Impact Players")
     
-    # 1. Use the pre-calculated all_players list from load_data
-    # (This is much faster than recalculating set(batter | bowler) on every click)
-    
-    # 2. Check if a player was sent here from the sidebar search
-    default_player_index = 0
+    # 1. Handle Navigation Override
+    default_player_idx = 0
     if 'selected_player_override' in st.session_state:
         try:
-            # Match the override name to the index in our master list
-            default_player_index = all_players.index(st.session_state.selected_player_override)
-            # Clear it so the user can freely change players afterward
+            default_player_idx = all_players.index(st.session_state.selected_player_override)
             del st.session_state.selected_player_override
         except (ValueError, NameError):
-            default_player_index = 0
+            default_player_idx = 0
 
-    # 3. The Selectbox - NOW USING THE INDEX
-    p = st.selectbox("Select Player", all_players, index=default_player_index)
+    # 2. Player Selection
+    p = st.selectbox("Select Player", all_players, index=default_player_idx)
     
-    # 4. Data Processing & UI
+    # 3. Data Fetching
     all_bat, all_bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
-    
-    # Wrap stats in a premium-box for the polish we discussed earlier
-    st.markdown(f'<div class="premium-box"><h3>Performance Dashboard: {p}</h3></div>', unsafe_allow_html=True)
-    
-    ca, cb = st.columns(2)
     bp = all_bat[all_bat['batter'] == p]
+    wp = all_bowl[all_bowl['bowler'] == p]
+    
+    # 4. UI Polish Header
+    st.markdown(f'<div class="premium-box"><h3>{p} - Statistical Profile</h3></div>', unsafe_allow_html=True)
+    
+    # 5. Dynamic Columns (Only show what exists for the player)
+    cols = st.columns(2)
+    
+    # Batting Metrics
     if not bp.empty:
-        with ca:
+        with cols[0]:
+            st.markdown("#### 🏏 Batting")
             st.metric("Total Runs", int(bp.iloc[0]['runs_batter']))
             st.metric("Strike Rate", f"{bp.iloc[0]['strike_rate']:.2f}")
-    
-    wp = all_bowl[all_bowl['bowler'] == p]
+    else:
+        with cols[0]:
+            st.caption("No batting data available for this player.")
+
+    # Bowling Metrics
     if not wp.empty:
-        with cb:
+        with cols[1]:
+            st.markdown("#### ⚾ Bowling")
             st.metric("Total Wickets", int(wp.iloc[0]['wickets']))
             st.metric("Economy", f"{wp.iloc[0]['economy']:.2f}")
-
+    else:
+        with cols[1]:
+            st.caption("No bowling data available for this player.")
+            
+    st.divider()
+    # Adding a Performance Chart (Optional Polish)
+    st.subheader("Season-wise Contribution")
+    # Logic for a small trend chart could go here
 elif page == "Player Comparison":
     st.title("Head-to-Head Comparison")
     all_players = sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique())))
@@ -938,6 +947,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

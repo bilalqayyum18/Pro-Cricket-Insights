@@ -10,11 +10,6 @@ from sklearn.preprocessing import LabelEncoder
 from supabase import create_client, Client
 from xgboost import XGBClassifier
 
-# --- 1. INITIALIZE PAGE VARIABLE FIRST ---
-# This prevents the NameError if data loading takes time or fails
-if "page_nav" not in st.session_state:
-    st.session_state.page_nav = "Season Dashboard"
-
 # --- HELPERS ---
 def extract_data(resp):
     """Safely extract data from Supabase response regardless of return type."""
@@ -272,7 +267,7 @@ def load_data():
                 break
             
             start += batch_size
-            prog = min(start / 75000, 0.99)
+            prog = min(start / 150000, 0.99)
             progress_bar.progress(prog, text=f"Fetched {len(all_balls)} records...")
             
         progress_bar.empty()
@@ -465,21 +460,43 @@ def get_inning_scorecard(df, innings_no):
     bowl['W'] = bowl['W'].astype(int); bowl['rc_temp'] = bowl['rc_temp'].astype(int)
     return bat[['batter', 'runs_batter', 'B', '4s', '6s', 'SR']], bowl[['bowler', 'O', 'rc_temp', 'W', 'Econ']]
 
-#NAVIGATION
+# --- NAVIGATION ---
 st.sidebar.title("Pakistan League Intelligence")
+
+# 1. Define the options list explicitly so we can find the index
 nav_options = ["Season Dashboard", "Fantasy Scout", "Match Center", "Impact Players", "Player Comparison", "Venue Analysis", "Umpire Records", "Hall of Fame", "Pro Prediction"]
 
+# 2. Sync session state with the radio selection
 if "page_nav" not in st.session_state:
     st.session_state.page_nav = "Season Dashboard"
 
+# Find the index of the current page to keep the radio button in sync
 try:
     default_index = nav_options.index(st.session_state.page_nav)
 except ValueError:
     default_index = 0
 
-# Define 'page' here so it's globally accessible for the conditional blocks below
+# 3. The Radio Button - Note the 'index' and 'key'
 page = st.sidebar.radio("Navigation", nav_options, index=default_index, key="navigation_radio")
+
+# Update the state if the user clicks manually
 st.session_state.page_nav = page
+
+# --- QUICK PLAYER LOOKUP ---
+st.sidebar.divider()
+search_query = st.sidebar.text_input("🔍 Quick Player Lookup")
+
+if search_query:
+    found_players = [p for p in all_players if search_query.lower() in p.lower()]
+    if found_players:
+        selected_from_search = st.sidebar.selectbox("Matches found:", found_players)
+        if st.sidebar.button("Go to Profile", use_container_width=True):
+            # 1. Set the override player for the Impact Players page
+            st.session_state.selected_player_override = selected_from_search
+            # 2. Change the navigation state
+            st.session_state.page_nav = "Impact Players" 
+            # 3. Rerun to apply changes
+            st.rerun()
             
 # --- AUTH / CONNECTION IN SIDEBAR ---
 with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user):
@@ -571,28 +588,24 @@ with st.sidebar.expander("🔐 User Account", expanded=not st.session_state.user
 # --- PAGE LOGIC ---
 if page == "Match Center":
     st.title("Pro Scorecard & Live Analysis")
-    
-    # 1. Season Selection
     s = st.selectbox("Season", sorted(matches_df['season'].unique(), reverse=True))
     ml = matches_df[matches_df['season'] == s]
-    
-    # 2. Match Selection Labeling
     def format_match_label(row):
         d = row['date']
         d_str = d.strftime('%Y-%m-%d') if pd.notnull(d) else "Unknown Date"
         return f"{row['team1']} vs {row['team2']} ({d_str})"
     
     ms = ml.apply(format_match_label, axis=1)
-    
     if not ms.empty:
         sel = st.selectbox("Pick Match", ms)
         idx = ms.tolist().index(sel)
         mm = ml.iloc[idx]
         
-        # 3. Filter balls for the selected match
+        # Filter balls for the selected match
         mb = balls_df[balls_df['match_id'] == mm['match_id']]
         
-        # 4. Match Header UI
+        display_date = mm['date'].strftime('%Y-%m-%d') if pd.notnull(mm['date']) else 'Unknown Date'
+        
         badge_class = "badge-runs" if mm['win_by'].strip().lower() == 'runs' else "badge-wickets"
         st.markdown(f"""
         <div class="premium-box" style="border-left: 5px solid #38bdf8;">
@@ -605,44 +618,63 @@ if page == "Match Center":
         </div>
         """, unsafe_allow_html=True)
         
-        # 5. Scorecard Summary
         st.markdown("### Scorecard Summary")
-        sc1, sc2 = st.tabs(["1st Innings", "2nd Innings"])
+        sc1, sc2 = st.tabs([f"1st Innings", f"2nd Innings"])
+        with sc1:
+            bt, bl = get_inning_scorecard(mb, 1)
+            if bt is not None:
+                c1, c2 = st.columns(2)
+                c1.markdown("**Batting**")
+                c1.dataframe(bt, use_container_width=True, hide_index=True)
+                c2.markdown("**Bowling**")
+                c2.dataframe(bl, use_container_width=True, hide_index=True)
+        with sc2:
+            bt, bl = get_inning_scorecard(mb, 2)
+            if bt is not None:
+                c1, c2 = st.columns(2)
+                c1.markdown("**Batting**")
+                c1.dataframe(bt, use_container_width=True, hide_index=True)
+                c2.markdown("**Bowling**")
+                c2.dataframe(bl, use_container_width=True, hide_index=True)
         
-        for i, tab in enumerate([sc1, sc2], 1):
-            with tab:
-                bt, bl = get_inning_scorecard(mb, i)
-                if bt is not None:
-                    c1, c2 = st.columns(2)
-                    c1.markdown("**Batting**")
-                    c1.dataframe(bt, use_container_width=True, hide_index=True)
-                    c2.markdown("**Bowling**")
-                    c2.dataframe(bl, use_container_width=True, hide_index=True)
-        
-        # 6. Visual Analytics
         if not mb.empty:
-            st.divider()
-            col_a, col_b = st.columns(2)
+            st.markdown("### Performance Charts")
+            chart_col1, chart_col2 = st.columns(2)
             
-            # Worm Chart
-            with col_a:
+            # Prepare Team Name Mapping for Charts
+            team_map = {}
+            for inn in [1, 2]:
+                team_name = mb[mb['innings'] == inn]['batting_team'].unique()
+                if len(team_name) > 0:
+                    team_map[inn] = team_name[0]
+                else:
+                    team_map[inn] = f"Innings {inn}"
+
+            # 1. Match Progression (Worm)
+            with chart_col1:
                 mb_c = mb.copy()
                 worm = mb_c.groupby(['innings', 'over'])['runs_total'].sum().groupby(level=0).cumsum().reset_index()
-                fig_worm = px.line(worm, x='over', y='runs_total', color='innings', 
-                                  title="Match Progression (Worm)", template="plotly_dark",
+                # Map innings number to team name
+                worm['Team'] = worm['innings'].map(team_map)
+                
+                fig_worm = px.line(worm, x='over', y='runs_total', color='Team', 
+                                  title="Match Progression (Worm)", template="plotly_dark", 
                                   labels={"over": "Overs", "runs_total": "Total Runs"})
                 st.plotly_chart(fig_worm, use_container_width=True)
-            
-            # Run Rate Progression
-            with col_b:
+
+            # 2. Runs Per Over Progression
+            with chart_col2:
                 mb_rr = mb.copy()
+                # Calculate RPO for each over
                 mb_rr['over_runs'] = mb_rr.groupby(['innings', 'over'])['runs_total'].transform('sum')
                 rr_df = mb_rr[['innings', 'over', 'over_runs']].drop_duplicates()
-                
-                fig_rr = px.bar(rr_df, x='over', y='over_runs', color='innings', 
-                                barmode='group', title="Runs Per Over",
-                                template="plotly_dark", 
-                                color_discrete_sequence=['#38bdf8', '#818cf8'])
+                # Map innings number to team name
+                rr_df['Team'] = rr_df['innings'].map(team_map)
+        
+                fig_rr = px.bar(rr_df, x='over', y='over_runs', color='Team', 
+                    barmode='group', title="Runs Per Over",
+                    template="plotly_dark", 
+                    color_discrete_sequence=['#38bdf8', '#818cf8'])
                 st.plotly_chart(fig_rr, use_container_width=True)
 
 elif page == "Pro Prediction":
@@ -834,53 +866,42 @@ elif page == "Fantasy Scout":
 elif page == "Impact Players":
     st.title("Impact Players")
     
-    # 1. Handle Navigation Override
-    default_player_idx = 0
+    # 1. Use the pre-calculated all_players list from load_data
+    # (This is much faster than recalculating set(batter | bowler) on every click)
+    
+    # 2. Check if a player was sent here from the sidebar search
+    default_player_index = 0
     if 'selected_player_override' in st.session_state:
         try:
-            default_player_idx = all_players.index(st.session_state.selected_player_override)
+            # Match the override name to the index in our master list
+            default_player_index = all_players.index(st.session_state.selected_player_override)
+            # Clear it so the user can freely change players afterward
             del st.session_state.selected_player_override
         except (ValueError, NameError):
-            default_player_idx = 0
+            default_player_index = 0
 
-    # 2. Player Selection
-    p = st.selectbox("Select Player", all_players, index=default_player_idx)
+    # 3. The Selectbox - NOW USING THE INDEX
+    p = st.selectbox("Select Player", all_players, index=default_player_index)
     
-    # 3. Data Fetching
+    # 4. Data Processing & UI
     all_bat, all_bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
+    
+    # Wrap stats in a premium-box for the polish we discussed earlier
+    st.markdown(f'<div class="premium-box"><h3>Performance Dashboard: {p}</h3></div>', unsafe_allow_html=True)
+    
+    ca, cb = st.columns(2)
     bp = all_bat[all_bat['batter'] == p]
-    wp = all_bowl[all_bowl['bowler'] == p]
-    
-    # 4. UI Polish Header
-    st.markdown(f'<div class="premium-box"><h3>{p} - Statistical Profile</h3></div>', unsafe_allow_html=True)
-    
-    # 5. Dynamic Columns (Only show what exists for the player)
-    cols = st.columns(2)
-    
-    # Batting Metrics
     if not bp.empty:
-        with cols[0]:
-            st.markdown("#### 🏏 Batting")
+        with ca:
             st.metric("Total Runs", int(bp.iloc[0]['runs_batter']))
             st.metric("Strike Rate", f"{bp.iloc[0]['strike_rate']:.2f}")
-    else:
-        with cols[0]:
-            st.caption("No batting data available for this player.")
-
-    # Bowling Metrics
+    
+    wp = all_bowl[all_bowl['bowler'] == p]
     if not wp.empty:
-        with cols[1]:
-            st.markdown("#### ⚾ Bowling")
+        with cb:
             st.metric("Total Wickets", int(wp.iloc[0]['wickets']))
             st.metric("Economy", f"{wp.iloc[0]['economy']:.2f}")
-    else:
-        with cols[1]:
-            st.caption("No bowling data available for this player.")
-            
-    st.divider()
-    # Adding a Performance Chart (Optional Polish)
-    st.subheader("Season-wise Contribution")
-    # Logic for a small trend chart could go here
+
 elif page == "Player Comparison":
     st.title("Head-to-Head Comparison")
     all_players = sorted(list(set(balls_df['batter'].unique()) | set(balls_df['bowler'].unique())))
@@ -939,6 +960,3 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
-
-
-

@@ -476,6 +476,7 @@ FANTASY_POINTS = {
     "three_wicket_bonus": 8, "four_wicket_bonus": 16, "five_wicket_bonus": 32,
     "captain_multiplier": 2.0, "vice_captain_multiplier": 1.5,
 }
+BUDGET_TOTAL = 100  # Total credits for 11 players (Dream11-style)
 
 def get_player_roles(balls_df):
     bat_stats = balls_df.groupby("batter").agg(bat_balls=("ball", "count"), bat_runs=("runs_batter", "sum")).reset_index()
@@ -501,6 +502,21 @@ def get_player_teams(balls_df):
     merged = bat_teams.merge(bowl_teams, on="player", how="outer", suffixes=("_bat", "_bowl"))
     merged["team"] = merged["batting_team"].fillna(merged["bowling_team"]).fillna("Unknown")
     return merged.set_index("player")["team"].to_dict()
+
+def get_player_costs_fantasy_scout(balls_df):
+    """Player costs (credits) using Fantasy Scout formula: runs + wickets*25. Scaled to 5-12 range for budget."""
+    bat = get_batting_stats(balls_df)
+    bowl = get_bowling_stats(balls_df)
+    pts = {}
+    for _, row in bat.iterrows():
+        pts[row["batter"]] = pts.get(row["batter"], 0) + int(row["runs_batter"])
+    for _, row in bowl.iterrows():
+        pts[row["bowler"]] = pts.get(row["bowler"], 0) + int(row["wickets"]) * 25
+    if not pts:
+        return {}
+    p_min, p_max = min(pts.values()), max(pts.values())
+    span = max(p_max - p_min, 1)
+    return {p: round(5 + (v - p_min) / span * 7, 1) for p, v in pts.items()}
 
 def compute_fantasy_points_for_season(balls_df, matches_df):
     bat, bowl = get_batting_stats(balls_df), get_bowling_stats(balls_df)
@@ -939,7 +955,7 @@ elif page == "Pro Prediction":
 
 elif page == "Fantasy League":
     st.title("Fantasy League")
-    st.markdown("*Build your dream XI and compete using real performance data. Master the art of squad selection to dominate real fantasy leagues.*")
+    st.markdown("*Build your dream XI. Budget: 100 credits. Player costs based on Fantasy Scout performance.*")
     st.markdown("---")
     fl_season = st.selectbox("Select Season", sorted(matches_df["season"].unique(), reverse=True), key="fl_season")
     fl_balls = balls_df[balls_df["season"] == fl_season]
@@ -949,12 +965,42 @@ elif page == "Fantasy League":
         roles = get_player_roles(balls_df)
         player_teams = get_player_teams(balls_df)
         pts_df = compute_fantasy_points_for_season(fl_balls, matches_df)
-        tab_build, tab_ai, tab_rules, tab_leaderboard, tab_my_leagues = st.tabs(["Build Your XI", "AI Dream Team", "Scoring Rules", "Season Leaderboard", "My Leagues"])
+        cost_map = get_player_costs_fantasy_scout(fl_balls)
 
-        with tab_rules:
-            st.markdown("""<div class="premium-box"><h3>Fantasy Points System</h3><p><b>Batting:</b> 1 pt/run, +1 per 4, +2 per 6. SR bonus: ≥150 (+6), 130–150 (+4), 110–130 (+2)</p><p><b>Bowling:</b> 25 pts/wicket. 3W +8, 4W +16, 5W +32. Economy: &lt;6 (+6), 6–7 (+4), 7–8 (+2)</p><p><b>Captain 2×</b> | <b>Vice 1.5×</b>. Squad: 11 (1 WK, 3–6 BAT, 1–5 AR, 3–6 BWL), max 4/team.</p></div>""", unsafe_allow_html=True)
+        # Show League Leaderboard at TOP when viewing one
+        if st.session_state.get("fl_view_leaderboard_league_id") and supabase:
+            try:
+                lg_id = st.session_state.fl_view_leaderboard_league_id
+                lg_info = extract_data(supabase.table("fantasy_leagues").select("name, season").eq("id", lg_id).execute())
+                lg_name = lg_info[0]["name"] if lg_info else "League"
+                lb_teams = supabase.table("fantasy_teams").select("team_name, total_points").eq("league_id", lg_id).order("total_points", desc=True).execute()
+                lb_data = extract_data(lb_teams) or []
+                st.markdown(f"### 🏆 {lg_name} — Leaderboard")
+                if lb_data:
+                    for i, r in enumerate(lb_data, 1):
+                        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                        st.markdown(f"**{medal}** {r.get('team_name','')} — **{int(r.get('total_points',0))}** pts")
+                else:
+                    st.caption("No teams yet.")
+                if st.button("← Close Leaderboard", key="fl_close_lb"):
+                    del st.session_state.fl_view_leaderboard_league_id
+                    st.rerun()
+                st.markdown("---")
+            except Exception:
+                pass
 
-        with tab_leaderboard:
+        tab_names = ["Build Your XI", "My Leagues", "AI Dream Team", "Scoring Rules", "Season Leaderboard"]
+        if st.session_state.get("fl_go_to_tab") == "build":
+            if "fl_tab_radio" in st.session_state:
+                del st.session_state["fl_tab_radio"]
+            if "fl_go_to_tab" in st.session_state:
+                del st.session_state.fl_go_to_tab
+        fl_tab = st.radio("", tab_names, index=0, horizontal=True, key="fl_tab_radio")
+
+        if fl_tab == "Scoring Rules":
+            st.markdown("""<div class="premium-box"><h3>Fantasy Points System</h3><p><b>Batting:</b> 1 pt/run, +1 per 4, +2 per 6. SR bonus: ≥150 (+6), 130–150 (+4), 110–130 (+2)</p><p><b>Bowling:</b> 25 pts/wicket. 3W +8, 4W +16, 5W +32. Economy: &lt;6 (+6), 6–7 (+4), 7–8 (+2)</p><p><b>Captain 2×</b> | <b>Vice 1.5×</b>. Squad: 11 (1 WK, 3–6 BAT, 1–5 AR, 3–6 BWL), max 4/team. <b>Budget: 100 credits.</b></p></div>""", unsafe_allow_html=True)
+
+        elif fl_tab == "Season Leaderboard":
             if not pts_df.empty:
                 top50 = pts_df.head(50).copy()
                 top50["team"] = top50["player"].map(player_teams)
@@ -963,7 +1009,7 @@ elif page == "Fantasy League":
             else:
                 st.info("No fantasy points data for this season.")
 
-        with tab_ai:
+        elif fl_tab == "AI Dream Team":
             st.subheader("AI Dream Team")
             if st.button("Generate AI Dream Team", key="gen_ai_team"):
                 with st.spinner("Computing optimal XI..."):
@@ -977,7 +1023,7 @@ elif page == "Fantasy League":
                 else:
                     st.warning("Could not generate Dream Team.")
 
-        with tab_my_leagues:
+        elif fl_tab == "My Leagues":
             if not st.session_state.user:
                 st.info("Login to create or join leagues and save your teams.")
             else:
@@ -1004,7 +1050,8 @@ elif page == "Fantasy League":
                             if err:
                                 st.error(err)
                             else:
-                                st.success("Joined!")
+                                st.success("Joined! Build your XI in the Build tab.")
+                                st.rerun()
                         else:
                             st.warning("Enter join code.")
                 with c3:
@@ -1021,30 +1068,28 @@ elif page == "Fantasy League":
                             leagues_for_season = [t for t in my_data if leagues_map.get(t.get("league_id"), {}).get("season") == fl_season]
                             for t in leagues_for_season:
                                 lg = leagues_map.get(t.get("league_id"), {})
-                                st.markdown(f"**{lg.get('name','')}** (S{lg.get('season','')}) · {int(t.get('total_points',0))} pts")
+                                st.markdown(f"""
+                                <div class="premium-box" style="padding:12px; margin-bottom:10px;">
+                                    <b>{lg.get('name','League')}</b> · Season {lg.get('season','')}<br>
+                                    <span style="color:#38bdf8;">{t.get('team_name','My Team')}</span> — <b>{int(t.get('total_points',0))}</b> pts
+                                </div>
+                                """, unsafe_allow_html=True)
                                 col_a, col_b = st.columns(2)
                                 with col_a:
-                                    if st.button("Load", key=f"fl_sel_{t['id']}"):
+                                    if st.button("Load Team", key=f"fl_sel_{t['id']}"):
                                         st.session_state.fl_selected_team_id = t["id"]
+                                        st.session_state.fl_go_to_tab = "build"
                                         st.rerun()
                                 with col_b:
-                                    if st.button("LB", key=f"fl_lb_{t['league_id']}"):
+                                    if st.button("Leaderboard", key=f"fl_lb_{t['league_id']}"):
                                         st.session_state.fl_view_leaderboard_league_id = t["league_id"]
                                         st.rerun()
-                            if "fl_view_leaderboard_league_id" in st.session_state:
-                                lb_teams = supabase.table("fantasy_teams").select("team_name, total_points").eq("league_id", st.session_state.fl_view_leaderboard_league_id).order("total_points", desc=True).execute()
-                                lb_data = extract_data(lb_teams) or []
-                                if lb_data:
-                                    st.dataframe(pd.DataFrame([{"Rank": i+1, "Team": r.get("team_name",""), "Points": int(r.get("total_points",0))} for i, r in enumerate(lb_data)]), hide_index=True)
-                                if st.button("Close Leaderboard"):
-                                    del st.session_state.fl_view_leaderboard_league_id
-                                    st.rerun()
                             if not leagues_for_season:
                                 st.caption("No leagues for this season.")
                         except Exception as e:
                             st.error(str(e))
 
-        with tab_build:
+        elif fl_tab == "Build Your XI":
             st.subheader("Build Your XI")
             if "fl_selected_team_id" not in st.session_state:
                 st.session_state.fl_selected_team_id = None
@@ -1062,6 +1107,9 @@ elif page == "Fantasy League":
             bwl_players = [p for p, r in roles.items() if r == "BWL"]
             pts_map = pts_df.set_index("player")["points"].to_dict() if not pts_df.empty else {}
 
+            def _cost(p): return cost_map.get(p, 8.0)
+            def _opt(plist): return ["— Select —"] + [f"{p} • {_cost(p)} cr" for p in plist] if plist else ["— Select —"]
+
             default_wk, default_bat, default_ar, default_bwl = "— Select —", [], [], []
             if st.session_state.get("fl_loaded_squad"):
                 ld, lr = st.session_state.fl_loaded_squad, st.session_state.get("fl_loaded_roles", {})
@@ -1072,19 +1120,34 @@ elif page == "Fantasy League":
                 default_bwl = [p for p in ld if lr.get(p) == "BWL" and p in bwl_players]
                 st.session_state.fl_loaded_squad = None
 
-            wk_opts = ["— Select —"] + bat_players
-            wk_idx = wk_opts.index(default_wk) if default_wk in wk_opts else 0
+            wk_opts = _opt(bat_players)
+            wk_idx = 0
+            if default_wk != "— Select —":
+                for i, o in enumerate(wk_opts):
+                    if o.startswith(default_wk + " •"):
+                        wk_idx = i
+                        break
             c1, c2, c3 = st.columns(3)
             with c1:
-                wk = st.selectbox("Wicket-Keeper (1)", wk_opts, index=wk_idx, key="fl_wk")
+                wk_sel = st.selectbox("Wicket-Keeper (1)", wk_opts, index=wk_idx, key="fl_wk")
+                wk = wk_sel.split(" • ")[0].strip() if (wk_sel and " • " in wk_sel) else wk_sel
             with c2:
-                bat = st.multiselect("Batsmen (3–6)", [p for p in bat_players if p != wk or wk == "— Select —"], default=default_bat, key="fl_bat")
+                bat_opts = [f"{p} • {_cost(p)} cr" for p in bat_players if p != wk or wk == "— Select —"]
+                bat_sel = st.multiselect("Batsmen (3–6)", bat_opts, default=[f"{p} • {_cost(p)} cr" for p in default_bat if p in bat_players], key="fl_bat")
+                bat = [s.split(" • ")[0] for s in bat_sel if " • " in s]
             with c3:
-                ar = st.multiselect("All-Rounders (1–5)", ar_players, default=default_ar, key="fl_ar")
-            bwl = st.multiselect("Bowlers (3–6)", bwl_players, default=default_bwl, key="fl_bwl")
+                ar_opts = [f"{p} • {_cost(p)} cr" for p in ar_players]
+                ar_sel = st.multiselect("All-Rounders (1–5)", ar_opts, default=[f"{p} • {_cost(p)} cr" for p in default_ar if p in ar_players], key="fl_ar")
+                ar = [s.split(" • ")[0] for s in ar_sel if " • " in s]
+            bwl_opts = [f"{p} • {_cost(p)} cr" for p in bwl_players]
+            bwl_sel = st.multiselect("Bowlers (3–6)", bwl_opts, default=[f"{p} • {_cost(p)} cr" for p in default_bwl if p in bwl_players], key="fl_bwl")
+            bwl = [s.split(" • ")[0] for s in bwl_sel if " • " in s]
 
             wk_list = [wk] if wk and wk != "— Select —" else []
             squad = list(dict.fromkeys(wk_list + bat + ar + bwl))
+            total_cost = sum(_cost(p) for p in squad)
+            budget_ok = total_cost <= BUDGET_TOTAL
+            st.markdown(f"**Credits: {total_cost:.1f} / {BUDGET_TOTAL}** {'✅' if budget_ok else '❌ Over budget!'}")
             n_wk, n_bat = len(wk_list), len(wk_list) + len([p for p in bat if p not in wk_list])
             n_ar, n_bwl = len(ar), len(bwl)
             team_counts = {}
@@ -1092,7 +1155,7 @@ elif page == "Fantasy League":
                 t = player_teams.get(p, "Unknown")
                 team_counts[t] = team_counts.get(t, 0) + 1
             team_ok = not any(c > 4 for c in team_counts.values())
-            valid = n_wk == 1 and 3 <= n_bat <= 6 and 1 <= n_ar <= 5 and 3 <= n_bwl <= 6 and len(squad) == 11 and team_ok
+            valid = n_wk == 1 and 3 <= n_bat <= 6 and 1 <= n_ar <= 5 and 3 <= n_bwl <= 6 and len(squad) == 11 and team_ok and budget_ok
 
             if len(squad) == 11 and valid:
                 cap = st.selectbox("Captain (2×)", squad, index=squad.index(st.session_state.get("fl_loaded_cap")) if st.session_state.get("fl_loaded_cap") in squad else 0, key="fl_cap")
@@ -1127,6 +1190,7 @@ elif page == "Fantasy League":
                             st.caption("Create or join a league to save.")
             else:
                 if len(squad) != 11: st.warning("Select exactly 11 players.")
+                elif not budget_ok: st.warning(f"Over budget! You have {total_cost:.1f} credits. Max {BUDGET_TOTAL}.")
                 elif not valid: st.warning("Check role constraints: 1 WK, 3–6 BAT, 1–5 AR, 3–6 BWL, max 4/team.")
 
 elif page == "Season Dashboard":
@@ -1267,10 +1331,3 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
-
-
-
-
-
-
-

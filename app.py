@@ -510,7 +510,7 @@ def compute_fantasy_points_for_season(balls_df, matches_df):
         p = row["batter"]
         runs = int(row["runs_batter"])
         fours, sixes = int(row.get("4s", 0)), int(row.get("6s", 0))
-        balls_faced = int(row.get("balls_faced", row.get("ball", 1)) - int(row.get("wide", 0))
+        balls_faced = int(row.get("balls_faced", row.get("ball", 1)) - int(row.get("wide", 0)))
         sr = (runs / balls_faced * 100) if balls_faced > 0 else 0
         bat_pts = runs * FANTASY_POINTS["runs"] + fours * FANTASY_POINTS["four"] + sixes * FANTASY_POINTS["six"]
         sr_bonus = 6 if sr >= 150 else (4 if sr >= 130 else (2 if sr >= 110 else 0))
@@ -1267,6 +1267,7 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
 
 
 

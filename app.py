@@ -510,7 +510,7 @@ def compute_fantasy_points_for_season(balls_df, matches_df):
         p = row["batter"]
         runs = int(row["runs_batter"])
         fours, sixes = int(row.get("4s", 0)), int(row.get("6s", 0))
-        balls_faced = int(row.get("balls_faced", row.get("ball", 1)) - int(row.get("wide", 0)))
+        balls_faced = int(row.get("balls_faced", row.get("ball", 1)) - int(row.get("wide", 0))
         sr = (runs / balls_faced * 100) if balls_faced > 0 else 0
         bat_pts = runs * FANTASY_POINTS["runs"] + fours * FANTASY_POINTS["four"] + sixes * FANTASY_POINTS["six"]
         sr_bonus = 6 if sr >= 150 else (4 if sr >= 130 else (2 if sr >= 110 else 0))
@@ -989,7 +989,10 @@ elif page == "Fantasy League":
                     if st.button("Create League", key="fl_create"):
                         if league_name and league_name.strip() and supabase:
                             lid, code = _fantasy_create_league(supabase, user_id, league_name.strip(), fl_season)
-                            st.success(f"League created! Share code: **{code}**") if lid else st.error(code)
+                            if lid:
+                                st.success(f"League created! Share code: **{code}**")
+                            else:
+                                st.error(code)
                         elif not league_name or not league_name.strip():
                             st.warning("Enter a league name.")
                 with c2:
@@ -998,7 +1001,10 @@ elif page == "Fantasy League":
                     if st.button("Join League", key="fl_join"):
                         if join_code_in and supabase:
                             lid, err = _fantasy_join_league(supabase, user_id, join_code_in)
-                            st.error(err) if err else st.success("Joined!")
+                            if err:
+                                st.error(err)
+                            else:
+                                st.success("Joined!")
                         else:
                             st.warning("Enter join code.")
                 with c3:
@@ -1112,8 +1118,11 @@ elif page == "Fantasy League":
                             save_league = st.selectbox("Save to league", list(league_options.keys()), key="fl_save_league")
                             if st.button("Save Team", key="fl_save_btn"):
                                 ok, err = _fantasy_save_team(supabase, league_options[save_league], [(p, roles.get(p,"BAT")) for p in squad], cap, vc, total)
-                                st.success("Saved!") if ok else st.error(err)
-                                if ok: st.rerun()
+                                if ok:
+                                    st.success("Saved!")
+                                    st.rerun()
+                                else:
+                                    st.error(err)
                         else:
                             st.caption("Create or join a league to save.")
             else:
@@ -1258,4 +1267,9 @@ st.markdown("""
     This platform is an independent fan-led project and is not affiliated with the PSL or PCB. Predictions are probabilistic and for entertainment only.
 </div>
 """, unsafe_allow_html=True)
+
+
+
+
+
 
